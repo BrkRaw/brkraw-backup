@@ -98,20 +98,39 @@ def _iter_archive_files(archive_root: Path) -> Dict[str, Path]:
     for entry in sorted(archive_root.iterdir()):
         if not entry.is_file():
             continue
-        if not zipfile.is_zipfile(entry):
+        name = entry.name
+        lower = name.lower()
+        if lower.endswith(".zip"):
+            key = name[:-4]
+        elif lower.endswith(".pvdatasets"):
+            key = name[: -len(".pvdatasets")]
+        elif name.endswith("PvDatasets"):
+            key = name[: -len("PvDatasets")]
+            if key.endswith("."):
+                key = key[:-1]
+        else:
             continue
-        key = _archive_key(entry)
+
+        key = key.strip()
+        if not key:
+            continue
+        # NOTE: Do not call zipfile.is_zipfile() here. It can be expensive on
+        # network-mounted archives. Validation happens later when we load metadata.
         datasets[key] = entry
     return datasets
 
 
 def _archive_key(zip_path: Path) -> str:
-    try:
-        fs = DatasetFS.from_path(zip_path)
-        if fs.anchor:
-            return fs.anchor
-    except Exception:
-        pass
+    # Retained for compatibility; avoid opening archives here.
+    name = zip_path.name
+    lower = name.lower()
+    if lower.endswith(".zip"):
+        return name[:-4]
+    if lower.endswith(".pvdatasets"):
+        return name[: -len(".pvdatasets")]
+    if name.endswith("PvDatasets"):
+        key = name[: -len("PvDatasets")]
+        return key[:-1] if key.endswith(".") else key
     return zip_path.stem
 
 
@@ -559,6 +578,12 @@ def migrate_legacy_cache_to_registry(
     keep_logs: int = 50,
     reporter: Optional[ProgressReporter] = None,
 ) -> Tuple[Dict[str, Any], int]:
+    try:
+        raw_n = len(getattr(legacy_cache, "raw_data", []) or [])
+        arc_n = len(getattr(legacy_cache, "arc_data", []) or [])
+    except Exception:
+        raw_n, arc_n = -1, -1
+    logger.info("Legacy cache summary: raw_entries=%s archive_entries=%s", raw_n, arc_n)
     datasets = registry.setdefault("datasets", {})
     if not isinstance(datasets, dict):
         datasets = {}

@@ -400,6 +400,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
     if args.old_cache == ".brk-backup_cache":
         logger.info("Using default legacy cache path (relative to archive_root).")
+    logger.info("Archive root: %s", archive_root)
 
     logger.debug(
         "backup migrate: legacy=%s registry=%s no_scan=%s overwrite=%s keep_logs=%s",
