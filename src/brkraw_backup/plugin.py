@@ -42,15 +42,14 @@ def _banner() -> None:
 
 def _make_progress(args: argparse.Namespace):
     def _pick_stream():
-        # brkraw's configure_logging() defaults to logging on stderr.
-        # Avoid mixing carriage-return progress output with log lines on the
-        # same stream by preferring stdout when root logging uses stderr.
+        # Render progress to the same stream as the root logging handler when possible,
+        # and clear the line before printing log output to avoid overwriting headers.
         root = logging.getLogger()
         for handler in root.handlers:
             if isinstance(handler, logging.StreamHandler):
                 stream = getattr(handler, "stream", None)
-                if stream is sys.stderr:
-                    return sys.stdout
+                if stream in {sys.stdout, sys.stderr}:
+                    return stream
         return sys.stderr
 
     stream = _pick_stream()
@@ -98,7 +97,8 @@ def _make_progress(args: argparse.Namespace):
     def done() -> None:
         if not enabled:
             return
-        stream.write("\n")
+        # Clear progress line to avoid leaving partial characters on screen.
+        stream.write("\r" + (" " * last_line_len) + "\r\n")
         stream.flush()
 
     if not enabled:

@@ -543,7 +543,8 @@ def render_scan_table(
     gap = "  "
 
     fixed = (
-        raw_w
+        len(gap)
+        + raw_w
         + len(gap)
         + arc_w
         + len(gap)
@@ -577,7 +578,7 @@ def render_scan_table(
             row["issues"] = _truncate(str(row.get("issues", "")), issues_w)
 
     template = (
-        f"{{key: <{key_w}}}"
+        f"{{key: <{key_w}}}{gap}"
         f"{{rawn: >{raw_w}}}{gap}"
         f"{{arcn: >{arc_w}}}{gap}"
         f"{{rawsz: >{rawsz_w}}}{gap}"
@@ -587,7 +588,7 @@ def render_scan_table(
         f"{{issues}}"
     )
     header = (
-        f"{'DATASET': <{key_w}}"
+        f"{'DATASET': <{key_w}}{gap}"
         f"{'RAW': >{raw_w}}{gap}"
         f"{'ARC': >{arc_w}}{gap}"
         f"{'RAW_SZ': >{rawsz_w}}{gap}"
