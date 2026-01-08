@@ -13,6 +13,7 @@ from . import __version__
 from .core import (
     DEFAULT_REGISTRY_NAME,
     archive_one,
+    deep_integrity_check,
     load_registry,
     load_legacy_cache,
     mark_backup_result,
@@ -261,6 +262,72 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable progress bar rendering.",
     )
+    parser.add_argument(
+        "--integrity",
+        choices=["off", "new", "all"],
+        default="off",
+        help="Optional deep integrity check (file list compare) for raw+archive pairs.",
+    )
+    parser.add_argument(
+        "--integrity-limit",
+        type=int,
+        default=0,
+        help="Max datasets to deep-check per run (0 means no limit).",
+    )
+
+
+def _maybe_run_integrity_checks(
+    *,
+    args: argparse.Namespace,
+    registry: dict,
+    snapshots: list,
+) -> None:
+    mode = getattr(args, "integrity", "off")
+    if mode == "off":
+        return
+    limit = int(getattr(args, "integrity_limit", 0) or 0)
+    checked = 0
+
+    datasets = registry.get("datasets", {})
+    if not isinstance(datasets, dict):
+        datasets = {}
+        registry["datasets"] = datasets
+
+    reporter, done = _make_progress(args)
+    candidates = []
+    for snap in snapshots:
+        if not getattr(snap, "raw_present", False) or not getattr(snap, "archive_present", False):
+            continue
+        if getattr(snap, "status", None) not in {"OK", "MISMATCH"}:
+            continue
+        if not snap.raw_path or not snap.archive_path:
+            continue
+        candidates.append(snap)
+
+    total = len(candidates)
+    for idx, snap in enumerate(candidates, start=1):
+        reporter(idx, total, "integrity:pick")
+        if limit and checked >= limit:
+            break
+        entry = datasets.get(snap.key, {})
+        if not isinstance(entry, dict):
+            entry = {}
+
+        if mode == "new":
+            last_backup = entry.get("last_backup")
+            last_check = entry.get("integrity", {}).get("checked_at") if isinstance(entry.get("integrity"), dict) else None
+            if isinstance(last_backup, str) and isinstance(last_check, str) and last_check >= last_backup:
+                continue
+
+        reporter(checked + 1, max(1, limit or total), "integrity:run")
+        result = deep_integrity_check(Path(snap.raw_path), Path(snap.archive_path))
+        entry["integrity"] = result
+        datasets[snap.key] = entry
+        checked += 1
+
+    done()
+    if checked:
+        logger.info("Integrity checks completed: %d", checked)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -309,6 +376,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     registry = load_registry(registry_path)
     width = _configured_print_width(root=args.root)
     logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    _maybe_run_integrity_checks(args=args, registry=registry, snapshots=snapshots)
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
     return 0
@@ -408,6 +476,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         else:
             logger.error("Archive verification failed: %s", dest)
     done()
+
+    # Newly created/updated archives can be integrity-checked immediately.
+    if getattr(args, "integrity", "off") != "off":
+        snapshots = scan_datasets(raw_root, archive_root)
+        _maybe_run_integrity_checks(args=args, registry=registry, snapshots=snapshots)
 
     reporter, done = _make_progress(args)
     snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)

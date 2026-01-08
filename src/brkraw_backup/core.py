@@ -9,7 +9,7 @@ from pathlib import Path
 import pickle
 import shutil
 import zipfile
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable, Set
 
 from brkraw.core.formatter import format_data
 from brkraw.dataclasses.study import Study
@@ -186,8 +186,12 @@ def scan_datasets(
             issues.append("archive_corrupt")
         if raw_present and not arc_present:
             issues.append("archive_missing")
-        if not raw_present and arc_present:
+        # raw_missing is expected once data is archived; treat it as an issue
+        # only when the archive is not readable/valid.
+        if not raw_present and arc_present and not arc_valid:
             issues.append("raw_missing")
+        if not raw_present and not arc_present:
+            issues.append("both_missing")
         if raw_present and arc_present and raw_valid and arc_valid:
             if raw_scans is not None and arc_scans is not None and raw_scans != arc_scans:
                 issues.append("scan_count_mismatch")
@@ -236,6 +240,8 @@ def _derive_status(
         return "INVALID"
     if raw_present and not archive_present:
         return "MISSING"
+    if not raw_present and archive_present and archive_valid:
+        return "ARCHIVED"
     if not raw_present and archive_present:
         return "RAW_REMOVED"
     if any(i in {"scan_count_mismatch", "paravision_version_mismatch"} for i in issues):
@@ -347,6 +353,8 @@ def mark_backup_result(
 def _status_cell(status: str) -> Mapping[str, Any]:
     if status == "OK":
         return {"value": status, "color": "green", "bold": True}
+    if status == "ARCHIVED":
+        return {"value": status, "color": "green", "bold": True}
     if status in {"MISSING", "CORRUPT", "INVALID"}:
         return {"value": status, "color": "red", "bold": True}
     if status == "MISMATCH":
@@ -354,6 +362,93 @@ def _status_cell(status: str) -> Mapping[str, Any]:
     if status == "RAW_REMOVED":
         return {"value": status, "color": "cyan"}
     return {"value": status, "color": "gray"}
+
+
+def _zip_root_prefix(zf: zipfile.ZipFile) -> str:
+    names = [n.strip("/") for n in zf.namelist() if n.strip("/")]
+    if not names:
+        return ""
+    first = names[0].split("/")[0]
+    for n in names[1:]:
+        if not n.startswith(first + "/") and n != first:
+            return ""
+    return first
+
+
+def _zip_file_set(path: Path) -> Set[str]:
+    with zipfile.ZipFile(path, "r") as zf:
+        prefix = _zip_root_prefix(zf)
+        files: Set[str] = set()
+        for info in zf.infolist():
+            name = info.filename
+            if not name or name.endswith("/"):
+                continue
+            name = name.strip("/")
+            if prefix and name.startswith(prefix + "/"):
+                name = name[len(prefix) + 1 :]
+            if name:
+                files.add(name)
+        return files
+
+
+def _dir_file_set(path: Path) -> Set[str]:
+    files: Set[str] = set()
+    for dirpath, _, filenames in os.walk(path):
+        for fname in filenames:
+            full = Path(dirpath) / fname
+            try:
+                rel = full.relative_to(path).as_posix()
+            except Exception:
+                continue
+            if rel:
+                files.add(rel)
+    return files
+
+
+def deep_integrity_check(raw_path: Path, archive_path: Path) -> Dict[str, Any]:
+    """Optional heavy check: compare raw vs archive file lists (zip-only)."""
+    raw_path = raw_path.resolve(strict=False)
+    archive_path = archive_path.resolve(strict=False)
+    started = _dt.datetime.now(tz=_dt.timezone.utc)
+
+    result: Dict[str, Any] = {
+        "checked_at": started.isoformat(),
+        "method": "filelist",
+        "raw_path": str(raw_path),
+        "archive_path": str(archive_path),
+    }
+
+    if not raw_path.exists() or not raw_path.is_dir():
+        result.update({"ok": False, "error": "raw_not_found"})
+        return result
+    if not archive_path.exists() or not archive_path.is_file():
+        result.update({"ok": False, "error": "archive_not_found"})
+        return result
+    if not zipfile.is_zipfile(archive_path):
+        result.update({"ok": None, "error": "archive_not_zip"})
+        return result
+
+    try:
+        raw_files = _dir_file_set(raw_path)
+        arc_files = _zip_file_set(archive_path)
+    except Exception as exc:
+        result.update({"ok": False, "error": f"exception:{type(exc).__name__}"})
+        return result
+
+    missing = sorted(raw_files - arc_files)
+    extra = sorted(arc_files - raw_files)
+    result.update(
+        {
+            "ok": len(missing) == 0,
+            "raw_files": len(raw_files),
+            "archive_files": len(arc_files),
+            "missing_files": len(missing),
+            "extra_files": len(extra),
+            "missing_examples": missing[:20],
+            "extra_examples": extra[:20],
+        }
+    )
+    return result
 
 
 def _format_bytes(value: Optional[int]) -> str:
