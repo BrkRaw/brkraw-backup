@@ -353,6 +353,9 @@ def mark_backup_result(
 def _status_cell(status: str) -> Mapping[str, Any]:
     label_map = {
         "MISSING": "NEED_BACKUP",
+        # Raw missing but archive exists (validation may be unknown/failed).
+        # Keep JSON status stable, but show friendlier label.
+        "RAW_REMOVED": "ARCHIVED",
     }
     label = label_map.get(status, status)
     if status == "OK":

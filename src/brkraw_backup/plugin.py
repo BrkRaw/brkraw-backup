@@ -6,7 +6,7 @@ import sys
 import time
 import shutil
 from pathlib import Path
-from typing import Optional, TextIO, Any
+from typing import Optional, TextIO, Any, cast
 
 from brkraw.core import config as config_core
 
@@ -31,8 +31,8 @@ from .core import (
 logger = logging.getLogger("brkraw")
 
 _BANNER_PRINTED = False
-_STDOUT: TextIO = sys.__stdout__
-_STDERR: TextIO = sys.__stderr__
+_STDOUT: TextIO = cast(TextIO, sys.__stdout__)
+_STDERR: TextIO = cast(TextIO, sys.__stderr__)
 
 
 def _banner() -> None:
@@ -137,20 +137,27 @@ def _configured_print_width(*, root: Optional[str]) -> Optional[int]:
     if not isinstance(logging_cfg, dict):
         return None
     value = logging_cfg.get("print_width")
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _effective_print_width(*, root: Optional[str]) -> Optional[int]:
     configured = _configured_print_width(root=root)
     if configured:
         return configured
-    if _STDERR.isatty():
-        cols: int = shutil.get_terminal_size(fallback=(0, 0)).columns
-        return cols if cols > 0 else None
-    return None
+    if _STDOUT.isatty() or _STDERR.isatty():
+        cols: int = shutil.get_terminal_size(fallback=(120, 0)).columns
+        return cols if cols > 0 else 120
+    # Non-interactive fallback: still cap output to prevent wrapping in logs.
+    return 120
 
 
 def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_archive: bool = True) -> tuple[Path, Path]:
