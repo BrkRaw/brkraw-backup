@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 import time
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -136,6 +137,19 @@ def _configured_print_width(*, root: Optional[str]) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _effective_print_width(*, root: Optional[str]) -> Optional[int]:
+    configured = _configured_print_width(root=root)
+    if configured:
+        return configured
+    try:
+        if sys.stderr.isatty():
+            cols = shutil.get_terminal_size(fallback=(0, 0)).columns
+            return int(cols) if cols else None
+    except Exception:
+        return None
+    return None
 
 
 def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_archive: bool = True) -> tuple[Path, Path]:
@@ -374,7 +388,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
     done()
     registry = load_registry(registry_path)
-    width = _configured_print_width(root=args.root)
+    width = _effective_print_width(root=args.root)
     logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
     _maybe_run_integrity_checks(args=args, registry=registry, snapshots=snapshots)
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
@@ -389,7 +403,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = _configured_print_width(root=args.root)
+    width = _effective_print_width(root=args.root)
 
     _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
     logger.debug("backup review: raw_root=%s archive_root=%s", raw_root, archive_root)
@@ -412,7 +426,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = _configured_print_width(root=args.root)
+    width = _effective_print_width(root=args.root)
     registry_path = archive_root / args.registry
 
     _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
@@ -554,7 +568,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
         done()
         registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
-        width = _configured_print_width(root=args.root)
+        width = _effective_print_width(root=args.root)
         logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
 
     save_registry(registry_path, registry)
@@ -576,8 +590,20 @@ def cmd_registry(args: argparse.Namespace) -> int:
     if not snapshots:
         logger.info("Registry is empty: %s", registry_path)
         return 0
-    width = _configured_print_width(root=args.root)
+    width = _effective_print_width(root=args.root)
     logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    return 0
+
+
+def cmd_about(args: argparse.Namespace) -> int:
+    _banner()
+    logger.info("python: %s", sys.executable)
+    logger.info("brkraw_backup: %s", __file__)
+    cfg_root = config_core.resolve_root(getattr(args, "root", None))
+    logger.info("config root: %s", cfg_root)
+    raw_cfg, arc_cfg = _get_backup_paths_from_config(root=getattr(args, "root", None))
+    logger.info("config backup.rawdata: %s", raw_cfg or "-")
+    logger.info("config backup.archive: %s", arc_cfg or "-")
     return 0
 
 
@@ -613,6 +639,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[na
     reg_p.add_argument("--registry", default=DEFAULT_REGISTRY_NAME)
     reg_p.add_argument("--root")
     reg_p.set_defaults(func=cmd_registry, parser=reg_p)
+
+    about_p = sub.add_parser("about", help="Show plugin version and config paths.")
+    about_p.add_argument(
+        "--root",
+        help="Override brkraw config root directory (default: BRKRAW_CONFIG_HOME or ~/.brkraw).",
+    )
+    about_p.set_defaults(func=cmd_about, parser=about_p)
 
     scan_p = sub.add_parser("scan", help="Scan raw/archive dirs and update registry.")
     _add_common_args(scan_p)
