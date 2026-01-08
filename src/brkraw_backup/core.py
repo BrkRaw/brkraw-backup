@@ -512,7 +512,10 @@ def render_scan_table(
 
     rows: List[Dict[str, Any]] = []
     max_key_len = max((len(s.key) for s in snapshots), default=len("DATASET"))
-    key_w = max_key_len + 2  # 1–2 char breathing room
+    # Hard cap to keep very long dataset names from blowing up table alignment.
+    # (Python format alignment does not truncate, so we must truncate ourselves.)
+    KEY_CAP = 53
+    key_w = min(max_key_len, KEY_CAP)
 
     def _last_backup(key: str) -> str:
         entry = reg_datasets.get(key)
@@ -582,13 +585,16 @@ def render_scan_table(
         remaining = max_width - fixed - key_w
         issues_w = max(0, remaining)
 
-        # truncate content to fit without wrapping
-        for row in rows:
-            key_text = str(row.get("key", ""))
-            if isinstance(row.get("key"), Mapping):
-                key_text = str(row["key"].get("value", ""))  # type: ignore[assignment]
-                row["key"] = dict(row["key"])  # shallow copy
-                row["key"]["value"] = _truncate(key_text, key_w)  # type: ignore[index]
+        # issues truncation for width control happens below (common path)
+
+    # Always truncate keys to key_w (even when max_width is None),
+    # because alignment does not truncate overlong strings.
+    for row in rows:
+        if isinstance(row.get("key"), Mapping):
+            key_text = str(row["key"].get("value", ""))  # type: ignore[index]
+            row["key"] = dict(row["key"])  # shallow copy
+            row["key"]["value"] = _truncate(key_text, key_w)  # type: ignore[index]
+        if issues_w is not None:
             row["issues"] = _truncate(str(row.get("issues", "")), issues_w)
 
     template = (
