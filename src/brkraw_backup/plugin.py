@@ -154,10 +154,10 @@ def _effective_print_width(*, root: Optional[str]) -> Optional[int]:
     if configured:
         return configured
     if _STDOUT.isatty() or _STDERR.isatty():
-        cols: int = shutil.get_terminal_size(fallback=(120, 0)).columns
-        return cols if cols > 0 else 120
+        cols: int = shutil.get_terminal_size(fallback=(80, 0)).columns
+        return cols if cols > 0 else 80
     # Non-interactive fallback: still cap output to prevent wrapping in logs.
-    return 120
+    return 80
 
 
 def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_archive: bool = True) -> tuple[Path, Path]:

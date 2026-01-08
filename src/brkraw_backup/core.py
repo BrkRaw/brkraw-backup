@@ -487,7 +487,7 @@ def _format_backup_time(value: Optional[str]) -> str:
     # Render in local time for operator friendliness.
     if dt.tzinfo is not None:
         dt = dt.astimezone()
-    return dt.strftime("%Y-%m-%d %H:%M")
+    return dt.strftime("%Y-%m-%d")
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -495,9 +495,10 @@ def _truncate(text: str, max_len: int) -> str:
         return ""
     if len(text) <= max_len:
         return text
-    if max_len <= 1:
+    if max_len <= 3:
         return text[:max_len]
-    return text[: max_len - 1] + "…"
+    # Use ASCII dots to keep monospace width predictable across terminals.
+    return text[: max_len - 3] + "..."
 
 
 def render_scan_table(
@@ -514,7 +515,7 @@ def render_scan_table(
     max_key_len = max((len(s.key) for s in snapshots), default=len("DATASET"))
     # Hard cap to keep very long dataset names from blowing up table alignment.
     # (Python format alignment does not truncate, so we must truncate ourselves.)
-    KEY_CAP = 53
+    KEY_CAP = 45
     key_w = min(max_key_len, KEY_CAP)
 
     def _last_backup(key: str) -> str:
