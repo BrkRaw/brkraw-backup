@@ -359,7 +359,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if snap.status in {"MISSING", "MISMATCH"}:
             if not snap.raw_present or not snap.raw_path:
                 continue
-            todo.append(Path(snap.raw_path))
+            todo.append(Path(snap.raw_path).expanduser().resolve(strict=False))
 
     if not todo:
         logger.info("Nothing to archive.")

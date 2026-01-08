@@ -200,8 +200,8 @@ def scan_datasets(
         snapshots.append(
             DatasetSnapshot(
                 key=key,
-                raw_path=str(raw_path) if raw_path else None,
-                archive_path=str(arc_path) if arc_path else None,
+                raw_path=str(raw_path.resolve(strict=False)) if raw_path else None,
+                archive_path=str(arc_path.resolve(strict=False)) if arc_path else None,
                 raw_present=raw_present,
                 archive_present=arc_present,
                 raw_valid=raw_valid,
@@ -289,8 +289,8 @@ def update_registry(
     data.setdefault("version", 1)
     data.setdefault("created_at", _utcnow())
     data.setdefault("datasets", {})
-    data["raw_root"] = str(raw_root)
-    data["archive_root"] = str(archive_root)
+    data["raw_root"] = str(raw_root.resolve(strict=False))
+    data["archive_root"] = str(archive_root.resolve(strict=False))
     datasets = dict(data["datasets"])
     now = _utcnow()
     for snap in snapshots:
@@ -521,11 +521,19 @@ def snapshots_from_registry(registry: Mapping[str, Any]) -> List[DatasetSnapshot
         else:
             issues = (str(issues_value),)
 
+        def _abs_path(value: object) -> Optional[str]:
+            if not isinstance(value, str) or not value.strip():
+                return None
+            try:
+                return str(Path(value).expanduser().resolve(strict=False))
+            except Exception:
+                return value
+
         snapshots.append(
             DatasetSnapshot(
                 key=str(entry.get("key", key)),
-                raw_path=entry.get("raw_path"),
-                archive_path=entry.get("archive_path"),
+                raw_path=_abs_path(entry.get("raw_path")),
+                archive_path=_abs_path(entry.get("archive_path")),
                 raw_present=bool(entry.get("raw_present", False)),
                 archive_present=bool(entry.get("archive_present", False)),
                 raw_valid=bool(entry.get("raw_valid", False)),
