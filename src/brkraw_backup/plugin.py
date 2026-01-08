@@ -677,6 +677,25 @@ def cmd_registry(args: argparse.Namespace) -> int:
     if not snapshots:
         logger.info("Registry is empty: %s", registry_path)
         return 0
+    include_status = getattr(args, "status", None)
+    exclude_status = getattr(args, "exclude_status", None)
+    if include_status or exclude_status:
+        include: Optional[set[str]] = None
+        exclude: set[str] = set()
+        if include_status:
+            include = {s.strip().upper() for s in include_status.split(",") if s.strip()}
+        if exclude_status:
+            exclude = {s.strip().upper() for s in exclude_status.split(",") if s.strip()}
+
+        filtered = []
+        for snap in snapshots:
+            status = str(getattr(snap, "status", "")).upper()
+            if include is not None and status not in include:
+                continue
+            if status in exclude:
+                continue
+            filtered.append(snap)
+        snapshots = filtered
     width = _effective_print_width(root=args.root)
     logger.info(
         "%s",
@@ -720,6 +739,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[na
         "--registry",
         default=DEFAULT_REGISTRY_NAME,
         help=f"Registry filename stored under archive_root (default: {DEFAULT_REGISTRY_NAME}).",
+    )
+    info_p.add_argument(
+        "--status",
+        help="Filter by status (comma-separated), e.g. OK,ARCHIVED,MISMATCH.",
+    )
+    info_p.add_argument(
+        "--exclude-status",
+        dest="exclude_status",
+        help="Exclude statuses (comma-separated).",
     )
     info_p.add_argument(
         "--root",
