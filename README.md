@@ -1,50 +1,130 @@
 # brkraw-backup
 
-CLI plugin that adds `brkraw backup` for scanning and archiving Paravision datasets.
+CLI plugin that adds `brkraw backup` for scanning and archiving Bruker ParaVision datasets.
 
-## Install (editable)
+## Getting started
+
+Install the plugin:
 
 ```bash
-pip install -e ./brkraw-backup
+pip install -U git+ssh://git@github.com/BrkRaw/brkraw-backup.git
 ```
 
-## Usage
+Initialize paths in `~/.brkraw/config.yaml`:
 
 ```bash
 brkraw backup init /path/to/raw_dir /path/to/archive_dir
-brkraw backup info /path/to/archive_dir
-brkraw backup scan  /path/to/raw_dir  /path/to/archive_dir
-brkraw backup review /path/to/raw_dir /path/to/archive_dir
-brkraw backup run   /path/to/raw_dir  /path/to/archive_dir
-brkraw backup migrate /path/to/raw_dir /path/to/archive_dir --old-cache .brk-backup_cache
+```
+
+Scan and view status:
+
+```bash
+brkraw backup scan
+brkraw backup info
 ```
 
 Notes:
-- Archives are created as zip files under the archive directory.
-- A JSON registry file is written to the archive directory (default: `.brkraw-backup-registry.json`).
-- If you ran `brkraw backup init`, you can omit `raw_dir` / `archive_dir` for `scan|review|run|info|migrate` and it will use `config.yaml` values (`backup.rawdata`, `backup.archive`).
-- If only one of `backup.rawdata` / `backup.archive` is set, commands will error and tell you which one is missing.
-- Progress bars are shown on TTY when log level allows (disable with `--no-progress`).
-- Detailed `ISSUES:` lines are shown only when log level is `DEBUG`.
+- Archives are stored under `backup.archive` as zip files.
+- A JSON registry is written under the archive directory (default: `.brkraw-backup-registry.json`).
+- If `backup.rawdata` / `backup.archive` are configured, most commands can omit positional paths.
+- Progress bars show only on TTY; disable with `--no-progress`.
+- Detailed `ISSUES:` sub-lines show only when log level is `DEBUG`.
+
+## Commands
+
+### `brkraw backup init`
+
+Register raw/archive directories in `brkraw` config.
+
+```bash
+brkraw backup init /raw /archive
+brkraw backup init /raw /archive --force
+```
+
+Writes:
+- `backup.rawdata: /raw`
+- `backup.archive: /archive`
+
+### `brkraw backup scan`
+
+Scan `rawdata` + `archive` and update the registry.
+
+```bash
+brkraw backup scan
+brkraw backup scan /raw /archive
+```
+
+### `brkraw backup info`
+
+Show the last recorded status from the JSON registry (no filesystem scan).
+
+```bash
+brkraw backup info
+brkraw backup info /archive
+```
+
+### `brkraw backup review`
+
+Scan and show only non-OK datasets.
+
+```bash
+brkraw backup review
+```
+
+### `brkraw backup run`
+
+Create/update archives for datasets that are missing a backup or mismatched.
+
+```bash
+brkraw backup run
+brkraw backup run --only A,B,C
+brkraw backup run --dry-run
+brkraw backup run --rebuild
+brkraw backup run --delete-raw --yes
+```
+
+Update behavior:
+- Default: append missing files into existing zip (no full rebuild).
+- `--rebuild`: recreate the zip from scratch.
+
+### `brkraw backup migrate`
+
+Import legacy `.brk-backup_cache` into the new JSON registry.
+
+```bash
+brkraw backup migrate /raw /archive
+brkraw backup migrate /raw /archive --old-cache /archive/.brk-backup_cache
+brkraw backup migrate /raw /archive --no-scan
+```
+
+### `brkraw backup about`
+
+Show plugin + environment info (useful for debugging installs).
+
+```bash
+brkraw backup about
+```
 
 ## Deep integrity scan (optional)
 
-Deep integrity scanning compares the raw directory file list against the archive ZIP file list.
-It is intentionally optional because it can be slow on large datasets / network storage.
+Deep integrity scanning compares:
+- raw file list vs zip file list
+- raw total bytes vs zip *uncompressed* bytes (`ZipInfo.file_size` sum)
+
+This is optional because it can be slow on large datasets / network storage.
 
 Options (available on `scan` and `run`):
-
 - `--integrity off|new|all` (default: `off`)
   - `off`: skip deep checks
-  - `new`: check only datasets where `last_backup` is newer than the last integrity check
+  - `new`: check only datasets that need a check (based on `last_backup` vs `integrity.checked_at`)
   - `all`: check all raw+archive pairs (subject to limit)
 - `--integrity-limit N` (default: `0`)
   - `0`: no limit
   - `N`: check at most N datasets per command invocation
 
-The `info/scan/review/run` table includes an `INTEG` column:
+The status table includes an `INTEG` column:
 - `-`: not checked
-- `OK`: deep check passed
-- `WARN`: deep check passed but byte totals differ
-- `FAIL`: deep check found missing files
-- `SKIP`: archive not a zip (cannot compare file lists)
+- `OK`: file list + byte totals match
+- `WARN`: file list OK but byte totals differ
+- `FAIL`: missing files found in archive
+- `SKIP`: archive is not a zip (cannot compare file lists / bytes)
