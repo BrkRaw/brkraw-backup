@@ -62,6 +62,7 @@ Show the last recorded status from the JSON registry (no filesystem scan).
 brkraw backup info
 brkraw backup info /archive
 brkraw backup info --status OK,ARCHIVED
+brkraw backup info --status TODO
 brkraw backup info --exclude-status UNKNOWN
 ```
 

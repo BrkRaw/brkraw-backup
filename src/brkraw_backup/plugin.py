@@ -680,12 +680,25 @@ def cmd_registry(args: argparse.Namespace) -> int:
     include_status = getattr(args, "status", None)
     exclude_status = getattr(args, "exclude_status", None)
     if include_status or exclude_status:
+        def _expand(tokens: set[str]) -> set[str]:
+            expanded: set[str] = set()
+            for token in tokens:
+                if token in {"TODO", "NEED_BACKUP"}:
+                    expanded.add("MISSING")
+                    continue
+                if token == "ARCHIVED":
+                    # Display label covers both states.
+                    expanded.update({"ARCHIVED", "RAW_REMOVED"})
+                    continue
+                expanded.add(token)
+            return expanded
+
         include: Optional[set[str]] = None
         exclude: set[str] = set()
         if include_status:
-            include = {s.strip().upper() for s in include_status.split(",") if s.strip()}
+            include = _expand({s.strip().upper() for s in include_status.split(",") if s.strip()})
         if exclude_status:
-            exclude = {s.strip().upper() for s in exclude_status.split(",") if s.strip()}
+            exclude = _expand({s.strip().upper() for s in exclude_status.split(",") if s.strip()})
 
         filtered = []
         for snap in snapshots:
