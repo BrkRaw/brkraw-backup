@@ -320,11 +320,31 @@ def _maybe_run_integrity_checks(
     for snap in snapshots:
         if not getattr(snap, "raw_present", False) or not getattr(snap, "archive_present", False):
             continue
-        if getattr(snap, "status", None) not in {"MATCH", "MISMATCH"}:
+        if getattr(snap, "status", None) not in {"OK", "MISMATCH"}:
             continue
         if not snap.raw_path or not snap.archive_path:
             continue
         candidates.append(snap)
+
+    def _parse_iso(value: object):
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            import datetime as _dt
+
+            return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _backup_dt(snap) -> object:
+        entry = datasets.get(snap.key, {})
+        if isinstance(entry, dict):
+            dt = _parse_iso(entry.get("last_backup"))
+            if dt is not None:
+                return dt
+        return ""
+
+    candidates.sort(key=lambda s: (_backup_dt(s), s.key), reverse=True)
 
     total = len(candidates)
     for idx, snap in enumerate(candidates, start=1):
@@ -338,8 +358,11 @@ def _maybe_run_integrity_checks(
         if mode == "new":
             last_backup = entry.get("last_backup")
             last_check = entry.get("integrity", {}).get("checked_at") if isinstance(entry.get("integrity"), dict) else None
-            if isinstance(last_backup, str) and isinstance(last_check, str) and last_check >= last_backup:
-                continue
+            if isinstance(last_backup, str) and isinstance(last_check, str):
+                dt_backup = _parse_iso(last_backup)
+                dt_check = _parse_iso(last_check)
+                if dt_backup is not None and dt_check is not None and dt_check >= dt_backup:
+                    continue
 
         reporter(checked + 1, max(1, limit or total), "integrity:run")
         result = deep_integrity_check(Path(snap.raw_path), Path(snap.archive_path))
@@ -397,7 +420,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     done()
     registry = load_registry(registry_path)
     width = _effective_print_width(root=args.root)
-    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    logger.info(
+        "%s",
+        render_scan_table(
+            snapshots,
+            max_width=width,
+            registry=registry,
+            show_issue_details=logger.isEnabledFor(logging.DEBUG),
+        ),
+    )
     _maybe_run_integrity_checks(args=args, registry=registry, snapshots=snapshots)
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
@@ -418,12 +449,20 @@ def cmd_review(args: argparse.Namespace) -> int:
     reporter, done = _make_progress(args)
     snapshots_all = scan_datasets(raw_root, archive_root, reporter=reporter)
     done()
-    snapshots = [s for s in snapshots_all if s.status != "MATCH"]
+    snapshots = [s for s in snapshots_all if s.status != "OK"]
     if not snapshots:
         logger.info("No issues found.")
         return 0
     registry = load_registry(archive_root / args.registry)
-    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    logger.info(
+        "%s",
+        render_scan_table(
+            snapshots,
+            max_width=width,
+            registry=registry,
+            show_issue_details=logger.isEnabledFor(logging.DEBUG),
+        ),
+    )
     return 0
 
 
@@ -509,7 +548,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     done()
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
-    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    logger.info(
+        "%s",
+        render_scan_table(
+            snapshots,
+            max_width=width,
+            registry=registry,
+            show_issue_details=logger.isEnabledFor(logging.DEBUG),
+        ),
+    )
     return 0
 
 
@@ -577,7 +624,15 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         done()
         registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
         width = _effective_print_width(root=args.root)
-        logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+        logger.info(
+            "%s",
+            render_scan_table(
+                snapshots,
+                max_width=width,
+                registry=registry,
+                show_issue_details=logger.isEnabledFor(logging.DEBUG),
+            ),
+        )
 
     save_registry(registry_path, registry)
     logger.info("Migrated %d dataset entries from %s", migrated, legacy_path.name)
@@ -599,7 +654,15 @@ def cmd_registry(args: argparse.Namespace) -> int:
         logger.info("Registry is empty: %s", registry_path)
         return 0
     width = _effective_print_width(root=args.root)
-    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
+    logger.info(
+        "%s",
+        render_scan_table(
+            snapshots,
+            max_width=width,
+            registry=registry,
+            show_issue_details=logger.isEnabledFor(logging.DEBUG),
+        ),
+    )
     return 0
 
 

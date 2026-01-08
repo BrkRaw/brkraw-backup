@@ -113,6 +113,8 @@ def _iter_archive_files(archive_root: Path) -> Dict[str, Path]:
         key = key.strip()
         if not key:
             continue
+        if key.startswith("."):
+            continue
         # NOTE: Do not call zipfile.is_zipfile() here. It can be expensive on
         # network-mounted archives. Validation happens later when we load metadata.
         datasets[key] = entry
@@ -506,6 +508,7 @@ def render_scan_table(
     *,
     max_width: Optional[int] = None,
     registry: Optional[Mapping[str, Any]] = None,
+    show_issue_details: bool = False,
 ) -> str:
     reg_datasets: Mapping[str, Any] = {}
     if registry and isinstance(registry.get("datasets"), Mapping):
@@ -652,6 +655,8 @@ def render_scan_table(
         rendered = format_data(row, template, width=None, on_missing="placeholder")
         if rendered:
             body_lines.append(rendered)
+        if not show_issue_details:
+            continue
         issues = str(row.get("issues") or "").strip()
         if issues:
             if max_width is not None:
