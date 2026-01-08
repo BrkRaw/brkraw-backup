@@ -9,7 +9,7 @@ from pathlib import Path
 import pickle
 import shutil
 import zipfile
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 
 from brkraw.apps.loader.core import BrukerLoader
 from brkraw.core.formatter import format_data
@@ -19,6 +19,7 @@ logger = logging.getLogger("brkraw")
 
 
 DEFAULT_REGISTRY_NAME = ".brkraw-backup-registry.json"
+ProgressReporter = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -126,14 +127,28 @@ def _load_loader(path: Path) -> Tuple[bool, Optional[int], Optional[str]]:
     return True, scan_count, loader.sw_version
 
 
-def scan_datasets(raw_root: Path, archive_root: Path) -> List[DatasetSnapshot]:
+def scan_datasets(
+    raw_root: Path,
+    archive_root: Path,
+    *,
+    reporter: Optional[ProgressReporter] = None,
+) -> List[DatasetSnapshot]:
+    logger.debug("Scanning datasets: raw_root=%s archive_root=%s", raw_root, archive_root)
     raw_datasets = _iter_raw_datasets(raw_root)
     archive_datasets = _iter_archive_files(archive_root)
+    logger.debug(
+        "Discovered candidates: raw=%d archive=%d",
+        len(raw_datasets),
+        len(archive_datasets),
+    )
 
     keys = sorted(set(raw_datasets) | set(archive_datasets))
     snapshots: List[DatasetSnapshot] = []
 
-    for key in keys:
+    total = len(keys)
+    for idx, key in enumerate(keys, start=1):
+        if reporter:
+            reporter(idx, total, "scan:datasets")
         raw_path = raw_datasets.get(key)
         arc_path = archive_datasets.get(key)
 
@@ -164,6 +179,8 @@ def scan_datasets(raw_root: Path, archive_root: Path) -> List[DatasetSnapshot]:
                 issues.append("paravision_version_mismatch")
 
         status = _derive_status(raw_present, arc_present, raw_valid, arc_valid, issues)
+        if issues:
+            logger.debug("Dataset issues: %s -> %s", key, ",".join(issues))
         snapshots.append(
             DatasetSnapshot(
                 key=key,
@@ -184,6 +201,9 @@ def scan_datasets(raw_root: Path, archive_root: Path) -> List[DatasetSnapshot]:
             )
         )
 
+    if reporter:
+        reporter(total, total, "scan:done")
+    logger.debug("Scan complete: datasets=%d", len(snapshots))
     return snapshots
 
 
@@ -219,11 +239,13 @@ def load_registry(path: Path) -> Dict[str, Any]:
             raise ValueError("registry must be a JSON object")
         data.setdefault("datasets", {})
         return data
-    except Exception:
+    except Exception as exc:
         backup = path.with_suffix(path.suffix + ".bak")
         try:
             shutil.copy2(path, backup)
+            logger.warning("Registry unreadable (%s); backed up to %s", path, backup)
         except Exception:
+            logger.warning("Registry unreadable (%s): %s", path, exc)
             pass
         return {"version": 1, "created_at": _utcnow(), "updated_at": _utcnow(), "datasets": {}}
 
@@ -237,6 +259,7 @@ def save_registry(path: Path, data: Mapping[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
     tmp.replace(path)
+    logger.debug("Saved registry: %s", path)
 
 
 def update_registry(
@@ -262,6 +285,7 @@ def update_registry(
         entry["last_scan"] = now
         datasets[snap.key] = entry
     data["datasets"] = datasets
+    logger.debug("Updated registry entries: %d", len(datasets))
     return data
 
 
@@ -293,6 +317,15 @@ def mark_backup_result(
         }
     )
     datasets[key] = entry
+    logger.debug(
+        "Backup result: key=%s archive=%s added=%d skipped=%d verified=%s dry_run=%s",
+        key,
+        archive_path,
+        added,
+        skipped,
+        verified,
+        dry_run,
+    )
 
 
 def _status_cell(status: str) -> Mapping[str, Any]:
@@ -337,15 +370,17 @@ def archive_one(
     *,
     rebuild: bool,
     dry_run: bool,
+    reporter: Optional[ProgressReporter] = None,
 ) -> Tuple[Path, int, int]:
     key = raw_path.name
     dest = archive_root / f"{key}.zip"
+    logger.debug("Archiving dataset: %s -> %s (rebuild=%s dry_run=%s)", raw_path, dest, rebuild, dry_run)
     if rebuild or not dest.exists():
-        added = _write_zip_from_dir(raw_path, dest, root_name=key, dry_run=dry_run)
+        added = _write_zip_from_dir(raw_path, dest, root_name=key, dry_run=dry_run, reporter=reporter)
         return dest, added, 0
 
     root_name = _archive_key(dest) or key
-    added, skipped = _append_missing_files(raw_path, dest, root_name=root_name, dry_run=dry_run)
+    added, skipped = _append_missing_files(raw_path, dest, root_name=root_name, dry_run=dry_run, reporter=reporter)
     return dest, added, skipped
 
 
@@ -357,15 +392,29 @@ def _walk_files(root: Path) -> Iterable[Tuple[Path, str]]:
             yield full, rel
 
 
-def _write_zip_from_dir(root: Path, dest: Path, *, root_name: str, dry_run: bool) -> int:
+def _write_zip_from_dir(
+    root: Path,
+    dest: Path,
+    *,
+    root_name: str,
+    dry_run: bool,
+    reporter: Optional[ProgressReporter] = None,
+) -> int:
     files = list(_walk_files(root))
+    total = len(files)
     if dry_run:
+        if reporter:
+            reporter(total, total, "zip:plan")
         return len(files)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for full, rel in files:
+        for idx, (full, rel) in enumerate(files, start=1):
+            if reporter:
+                reporter(idx, total, "zip:write")
             arcname = f"{root_name}/{rel}".strip("/")
             zf.write(full, arcname)
+    if reporter:
+        reporter(total, total, "zip:done")
     return len(files)
 
 
@@ -375,6 +424,7 @@ def _append_missing_files(
     *,
     root_name: str,
     dry_run: bool,
+    reporter: Optional[ProgressReporter] = None,
 ) -> Tuple[int, int]:
     if not dest.exists():
         raise FileNotFoundError(dest)
@@ -387,7 +437,11 @@ def _append_missing_files(
 
     add: List[Tuple[Path, str]] = []
     skipped = 0
-    for full, rel in _walk_files(root):
+    files = list(_walk_files(root))
+    total = len(files)
+    for idx, (full, rel) in enumerate(files, start=1):
+        if reporter:
+            reporter(idx, total, "zip:diff")
         arcname = f"{root_name}/{rel}".strip("/")
         if arcname in existing:
             skipped += 1
@@ -395,11 +449,18 @@ def _append_missing_files(
         add.append((full, arcname))
 
     if dry_run:
+        if reporter:
+            reporter(total, total, "zip:plan")
         return len(add), skipped
 
     with zipfile.ZipFile(dest, "a", compression=zipfile.ZIP_DEFLATED) as zf:
-        for full, arcname in add:
+        total_add = len(add)
+        for idx, (full, arcname) in enumerate(add, start=1):
+            if reporter:
+                reporter(idx, total_add, "zip:append")
             zf.write(full, arcname)
+    if reporter:
+        reporter(total, total, "zip:done")
     return len(add), skipped
 
 
@@ -415,7 +476,9 @@ def maybe_delete_raw(
     if not confirmed:
         raise ValueError("Refusing to delete raw data without --yes.")
     if dry_run:
+        logger.debug("Dry-run delete raw dataset: %s", raw_path)
         return
+    logger.warning("Deleting raw dataset: %s", raw_path)
     shutil.rmtree(raw_path)
 
 

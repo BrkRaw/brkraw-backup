@@ -24,3 +24,4 @@ Notes:
 - A JSON registry file is written to the archive directory (default: `.brkraw-backup-registry.json`).
 - If you ran `brkraw backup init`, you can omit `raw_dir` / `archive_dir` for `scan|review|run|info|migrate` and it will use `config.yaml` values (`backup.rawdata`, `backup.archive`).
 - If only one of `backup.rawdata` / `backup.archive` is set, commands will error and tell you which one is missing.
+- Progress bars are shown on TTY when log level allows (disable with `--no-progress`).

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +26,59 @@ from .core import (
 )
 
 logger = logging.getLogger("brkraw")
+
+
+def _make_progress(args: argparse.Namespace):
+    enabled = (
+        not bool(getattr(args, "no_progress", False))
+        and sys.stderr.isatty()
+        and logger.isEnabledFor(logging.INFO)
+    )
+    last_emit = 0.0
+    last_line_len = 0
+
+    def _label(step: str) -> str:
+        if step.startswith("scan:"):
+            return "scan"
+        if step.startswith("zip:"):
+            return "zip"
+        return step.split(":", 1)[0] if ":" in step else step
+
+    def reporter(current: int, total: int, step: str) -> None:
+        nonlocal last_emit, last_line_len
+        if total <= 0:
+            return
+        now = time.time()
+        if now - last_emit < 0.1 and current < total:
+            return
+        last_emit = now
+
+        label = _label(step)
+        width = 24
+        frac = min(1.0, max(0.0, current / total))
+        filled = int(width * frac)
+        bar = "#" * filled + "-" * (width - filled)
+        line = f"{label} [{bar}] {current}/{total}"
+        pad = " " * max(0, last_line_len - len(line))
+        last_line_len = len(line)
+        sys.stderr.write("\r" + line + pad)
+        sys.stderr.flush()
+
+    def done() -> None:
+        if not enabled:
+            return
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+    if not enabled:
+        def reporter_noop(current: int, total: int, step: str) -> None:
+            return
+
+        def done_noop() -> None:
+            return
+
+        return reporter_noop, done_noop
+    return reporter, done
 
 
 def _get_backup_paths_from_config(*, root: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -58,9 +113,70 @@ def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_arch
         )
         raise ValueError(f"Missing required path(s): {', '.join(missing)}. {hint}")
 
-    raw_path = Path(raw_value).expanduser() if raw_value else Path()
-    arc_path = Path(arc_value).expanduser() if arc_value else Path()
+    def _resolve(p: str) -> Path:
+        # Use realpath-like resolution so symlinks are handled consistently.
+        # strict=False allows resolution even if the directory doesn't exist yet.
+        return Path(p).expanduser().resolve(strict=False)
+
+    raw_path = _resolve(raw_value) if raw_value else Path()
+    arc_path = _resolve(arc_value) if arc_value else Path()
     return raw_path, arc_path
+
+
+def _maybe_prompt_save_backup_paths(
+    args: argparse.Namespace,
+    *,
+    raw_root: Path,
+    archive_root: Path,
+) -> None:
+    if getattr(args, "no_config_prompt", False):
+        return
+    if not sys.stdin.isatty():
+        return
+
+    raw_cli = getattr(args, "raw_root", None) or getattr(args, "rawdata", None)
+    arc_cli = getattr(args, "archive_root", None) or getattr(args, "archive", None)
+    if not raw_cli or not arc_cli:
+        return
+
+    config = config_core.load_config(root=getattr(args, "root", None))
+    if config is None:
+        return
+
+    backup_cfg = config.get("backup")
+    if not isinstance(backup_cfg, dict):
+        backup_cfg = {}
+
+    missing_keys: list[str] = []
+    if not (isinstance(backup_cfg.get("rawdata"), str) and backup_cfg.get("rawdata", "").strip()):
+        missing_keys.append("backup.rawdata")
+    if not (isinstance(backup_cfg.get("archive"), str) and backup_cfg.get("archive", "").strip()):
+        missing_keys.append("backup.archive")
+    if not missing_keys:
+        return
+
+    raw_root = raw_root.resolve(strict=False)
+    archive_root = archive_root.resolve(strict=False)
+
+    prompt = (
+        f"Config file exists but {', '.join(missing_keys)} not set.\n"
+        f"Save current paths to config.yaml?\n"
+        f"  rawdata : {raw_root}\n"
+        f"  archive : {archive_root}\n"
+        f"[y/N]: "
+    )
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if answer not in {"y", "yes"}:
+        return
+
+    backup_cfg.setdefault("rawdata", str(raw_root))
+    backup_cfg.setdefault("archive", str(archive_root))
+    config["backup"] = backup_cfg
+    config_core.write_config(config, root=getattr(args, "root", None))
+    logger.info("Saved backup.rawdata/archive to config.yaml.")
 
 
 def _add_init_args(parser: argparse.ArgumentParser) -> None:
@@ -91,11 +207,21 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--root",
         help="Override brkraw config root directory (default: BRKRAW_CONFIG_HOME or ~/.brkraw).",
     )
+    parser.add_argument(
+        "--no-config-prompt",
+        action="store_true",
+        help="Disable interactive prompt to save missing backup paths into config.yaml.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bar rendering.",
+    )
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    raw_root = str(Path(args.raw_root).expanduser())
-    archive_root = str(Path(args.archive_root).expanduser())
+    raw_root = str(Path(args.raw_root).expanduser().resolve(strict=False))
+    archive_root = str(Path(args.archive_root).expanduser().resolve(strict=False))
 
     config_core.ensure_initialized(root=args.root, create_config=True, exist_ok=True)
     config = config_core.load_config(root=args.root) or {}
@@ -130,7 +256,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
     width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
-    snapshots = scan_datasets(raw_root, archive_root)
+    _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
+    logger.debug("backup scan: raw_root=%s archive_root=%s registry=%s", raw_root, archive_root, registry_path)
+    reporter, done = _make_progress(args)
+    snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
+    done()
     registry = load_registry(registry_path)
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
@@ -147,7 +277,12 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 2
     width = config_core.output_width(root=args.root)
 
-    snapshots = [s for s in scan_datasets(raw_root, archive_root) if s.status != "OK"]
+    _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
+    logger.debug("backup review: raw_root=%s archive_root=%s", raw_root, archive_root)
+    reporter, done = _make_progress(args)
+    snapshots_all = scan_datasets(raw_root, archive_root, reporter=reporter)
+    done()
+    snapshots = [s for s in snapshots_all if s.status != "OK"]
     if not snapshots:
         logger.info("No issues found.")
         return 0
@@ -164,7 +299,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
-    snapshots = scan_datasets(raw_root, archive_root)
+    _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
+    logger.debug(
+        "backup run: raw_root=%s archive_root=%s rebuild=%s dry_run=%s delete_raw=%s",
+        raw_root,
+        archive_root,
+        bool(args.rebuild),
+        bool(args.dry_run),
+        bool(args.delete_raw),
+    )
+    reporter, done = _make_progress(args)
+    snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
+    done()
     registry = load_registry(registry_path)
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
 
@@ -186,8 +332,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         save_registry(registry_path, registry)
         return 0
 
-    for raw_path in todo:
-        dest, added, skipped = archive_one(raw_path, archive_root, rebuild=args.rebuild, dry_run=args.dry_run)
+    reporter, done = _make_progress(args)
+    for idx, raw_path in enumerate(todo, start=1):
+        reporter(idx, len(todo), "archive:datasets")
+        dest, added, skipped = archive_one(
+            raw_path,
+            archive_root,
+            rebuild=args.rebuild,
+            dry_run=args.dry_run,
+            reporter=reporter,
+        )
         ok = True
         if not args.dry_run:
             ok = verify_archive(dest)
@@ -205,8 +359,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             maybe_delete_raw(raw_path, allow=args.delete_raw, confirmed=args.yes, dry_run=args.dry_run)
         else:
             logger.error("Archive verification failed: %s", dest)
+    done()
 
-    snapshots = scan_datasets(raw_root, archive_root)
+    reporter, done = _make_progress(args)
+    snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
+    done()
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
     logger.info("%s", render_scan_table(snapshots, width=width))
@@ -222,10 +379,20 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
+    if not args.no_scan:
+        _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
     legacy_path = Path(args.old_cache).expanduser()
     if not legacy_path.is_absolute():
         legacy_path = archive_root / legacy_path
 
+    logger.debug(
+        "backup migrate: legacy=%s registry=%s no_scan=%s overwrite=%s keep_logs=%s",
+        legacy_path,
+        registry_path,
+        bool(args.no_scan),
+        bool(args.overwrite),
+        int(args.keep_logs),
+    )
     legacy = load_legacy_cache(legacy_path)
     if legacy is None:
         logger.error("Legacy cache not found or unreadable: %s", legacy_path)
@@ -242,7 +409,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     )
 
     if not args.no_scan:
-        snapshots = scan_datasets(raw_root, archive_root)
+        reporter, done = _make_progress(args)
+        snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
+        done()
         registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
         logger.info("%s", render_scan_table(snapshots, width=width))
 
