@@ -509,7 +509,7 @@ def render_scan_table(
 
     rows: List[Dict[str, Any]] = []
     max_key_len = max((len(s.key) for s in snapshots), default=len("DATASET"))
-    key_w = max_key_len + 3
+    key_w = max_key_len + 2  # 1–2 char breathing room
 
     def _last_backup(key: str) -> str:
         entry = reg_datasets.get(key)
@@ -539,14 +539,19 @@ def render_scan_table(
             }
         )
 
-    # fixed-width columns (not including key/issues)
-    raw_w = max(3, len("RAW"))
-    arc_w = max(3, len("ARC"))
-    rawsz_w = max(6, len("RAW_SZ"))
-    arcz_w = max(6, len("ARC_SZ"))
-    bkp_w = len("BACKUP_AT")
-    status_w = max(10, len("STATUS"))
+    def _cell_text(value: Any) -> str:
+        if isinstance(value, Mapping) and "value" in value:
+            return str(value.get("value", ""))
+        return str(value)
+
+    # compute widths from actual rendered values
     gap = "  "
+    raw_w = max(len("RAW"), max((len(_cell_text(r["rawn"])) for r in rows), default=1))
+    arc_w = max(len("ARC"), max((len(_cell_text(r["arcn"])) for r in rows), default=1))
+    rawsz_w = max(len("RAW_SZ"), max((len(_cell_text(r["rawsz"])) for r in rows), default=1))
+    arcz_w = max(len("ARC_SZ"), max((len(_cell_text(r["arcsz"])) for r in rows), default=1))
+    bkp_w = max(len("BACKUP_AT"), max((len(_cell_text(r["bkp"])) for r in rows), default=1))
+    status_w = max(len("STATUS"), max((len(_cell_text(r["status"])) for r in rows), default=1))
 
     fixed = (
         len(gap)
