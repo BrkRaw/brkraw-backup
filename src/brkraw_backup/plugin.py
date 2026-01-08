@@ -6,7 +6,7 @@ import sys
 import time
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO, Any
 
 from brkraw.core import config as config_core
 
@@ -31,6 +31,8 @@ from .core import (
 logger = logging.getLogger("brkraw")
 
 _BANNER_PRINTED = False
+_STDOUT: TextIO = sys.__stdout__
+_STDERR: TextIO = sys.__stderr__
 
 
 def _banner() -> None:
@@ -42,16 +44,18 @@ def _banner() -> None:
 
 
 def _make_progress(args: argparse.Namespace):
-    def _pick_stream():
+    def _pick_stream() -> TextIO:
         # Render progress to the same stream as the root logging handler when possible,
         # and clear the line before printing log output to avoid overwriting headers.
         root = logging.getLogger()
         for handler in root.handlers:
             if isinstance(handler, logging.StreamHandler):
                 stream = getattr(handler, "stream", None)
-                if stream in {sys.stdout, sys.stderr}:
-                    return stream
-        return sys.stderr
+                if stream is sys.stdout or stream is sys.__stdout__:
+                    return _STDOUT
+                if stream is sys.stderr or stream is sys.__stderr__:
+                    return _STDERR
+        return _STDERR
 
     stream = _pick_stream()
     enabled = (
@@ -143,12 +147,9 @@ def _effective_print_width(*, root: Optional[str]) -> Optional[int]:
     configured = _configured_print_width(root=root)
     if configured:
         return configured
-    try:
-        if sys.stderr.isatty():
-            cols = shutil.get_terminal_size(fallback=(0, 0)).columns
-            return int(cols) if cols else None
-    except Exception:
-        return None
+    if _STDERR.isatty():
+        cols: int = shutil.get_terminal_size(fallback=(0, 0)).columns
+        return cols if cols > 0 else None
     return None
 
 
