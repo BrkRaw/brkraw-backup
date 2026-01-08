@@ -353,9 +353,10 @@ def _maybe_run_integrity_checks(
         last_check_ts = 0.0
         if isinstance(integ, dict):
             last_check_ts = _epoch_seconds(integ.get("checked_at"))
-        # If we don't know backup time, treat as needing check.
+        # If we don't know backup time, only run once (until first check is recorded),
+        # otherwise `--integrity new` would keep re-checking the same newest keys forever.
         if last_backup_ts <= 0:
-            return True
+            return last_check_ts <= 0
         # Run again only if backup is newer than the last check.
         return last_check_ts < last_backup_ts
 
