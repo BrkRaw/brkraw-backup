@@ -416,6 +416,50 @@ def _dir_file_set(path: Path) -> Set[str]:
     return files
 
 
+def _zip_file_sizes(path: Path) -> tuple[Set[str], int]:
+    """Return (file set, sum of uncompressed file sizes) for a zip archive."""
+    with zipfile.ZipFile(path, "r") as zf:
+        prefix = _zip_root_prefix(zf)
+        files: Set[str] = set()
+        total = 0
+        for info in zf.infolist():
+            name = info.filename
+            if not name or name.endswith("/"):
+                continue
+            name = name.strip("/")
+            if prefix and name.startswith(prefix + "/"):
+                name = name[len(prefix) + 1 :]
+            if not name:
+                continue
+            files.add(name)
+            try:
+                total += int(getattr(info, "file_size", 0) or 0)
+            except Exception:
+                pass
+        return files, total
+
+
+def _dir_file_sizes(path: Path) -> tuple[Set[str], int]:
+    """Return (file set, sum of file sizes) for a directory tree."""
+    files: Set[str] = set()
+    total = 0
+    for dirpath, _, filenames in os.walk(path):
+        for fname in filenames:
+            full = Path(dirpath) / fname
+            try:
+                rel = full.relative_to(path).as_posix()
+            except Exception:
+                continue
+            if not rel:
+                continue
+            files.add(rel)
+            try:
+                total += full.stat().st_size
+            except OSError:
+                continue
+    return files, total
+
+
 def deep_integrity_check(raw_path: Path, archive_path: Path) -> Dict[str, Any]:
     """Optional heavy check: compare raw vs archive file lists (zip-only)."""
     raw_path = raw_path.resolve(strict=False)
@@ -440,19 +484,24 @@ def deep_integrity_check(raw_path: Path, archive_path: Path) -> Dict[str, Any]:
         return result
 
     try:
-        raw_files = _dir_file_set(raw_path)
-        arc_files = _zip_file_set(archive_path)
+        raw_files, raw_bytes = _dir_file_sizes(raw_path)
+        arc_files, arc_uncompressed_bytes = _zip_file_sizes(archive_path)
     except Exception as exc:
         result.update({"ok": False, "error": f"exception:{type(exc).__name__}"})
         return result
 
     missing = sorted(raw_files - arc_files)
     extra = sorted(arc_files - raw_files)
+    bytes_match = raw_bytes == arc_uncompressed_bytes
     result.update(
         {
             "ok": len(missing) == 0,
             "raw_files": len(raw_files),
             "archive_files": len(arc_files),
+            "raw_bytes": raw_bytes,
+            "archive_uncompressed_bytes": arc_uncompressed_bytes,
+            "bytes_match": bytes_match,
+            "bytes_delta": arc_uncompressed_bytes - raw_bytes,
             "missing_files": len(missing),
             "extra_files": len(extra),
             "missing_examples": missing[:20],
@@ -535,7 +584,10 @@ def render_scan_table(
         if not isinstance(integ, Mapping):
             return "-"
         ok = integ.get("ok")
+        bytes_match = integ.get("bytes_match")
         if ok is True:
+            if bytes_match is False:
+                return "WARN"
             return "OK"
         if ok is False:
             return "FAIL"

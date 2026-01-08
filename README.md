@@ -45,5 +45,6 @@ Options (available on `scan` and `run`):
 The `info/scan/review/run` table includes an `INTEG` column:
 - `-`: not checked
 - `OK`: deep check passed
+- `WARN`: deep check passed but byte totals differ
 - `FAIL`: deep check found missing files
 - `SKIP`: archive not a zip (cannot compare file lists)
