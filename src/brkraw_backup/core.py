@@ -557,6 +557,7 @@ def migrate_legacy_cache_to_registry(
     source_path: Path,
     overwrite: bool = False,
     keep_logs: int = 50,
+    reporter: Optional[ProgressReporter] = None,
 ) -> Tuple[Dict[str, Any], int]:
     datasets = registry.setdefault("datasets", {})
     if not isinstance(datasets, dict):
@@ -600,7 +601,13 @@ def migrate_legacy_cache_to_registry(
         )
 
     migrated = 0
-    for _, item in sorted(by_pid.items(), key=lambda kv: kv[0]):
+    items = [item for _, item in sorted(by_pid.items(), key=lambda kv: kv[0])]
+    total = len(items)
+    if reporter and total:
+        reporter(0, total, "migrate:datasets")
+    for idx, item in enumerate(items, start=1):
+        if reporter:
+            reporter(idx, total, "migrate:datasets")
         raw = item.get("raw") or {}
         key = raw.get("path")
         if not isinstance(key, str) or not key.strip():
@@ -637,6 +644,8 @@ def migrate_legacy_cache_to_registry(
         migrated += 1
 
     registry["datasets"] = datasets
+    if reporter and total:
+        reporter(total, total, "migrate:done")
     registry.setdefault("migrations", [])
     migrations = registry["migrations"]
     if isinstance(migrations, list):

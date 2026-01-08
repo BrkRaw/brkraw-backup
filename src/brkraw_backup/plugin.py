@@ -393,12 +393,19 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         bool(args.overwrite),
         int(args.keep_logs),
     )
+    logger.info("Migrating legacy cache -> registry")
+    logger.info("Legacy cache: %s", legacy_path)
+    logger.info("Registry: %s", registry_path)
     legacy = load_legacy_cache(legacy_path)
     if legacy is None:
-        logger.error("Legacy cache not found or unreadable: %s", legacy_path)
+        logger.error(
+            "Legacy cache not found or unreadable: %s (tip: pass --old-cache /path/to/.brk-backup_cache)",
+            legacy_path,
+        )
         return 2
 
     registry = load_registry(registry_path)
+    reporter, done = _make_progress(args)
     registry, migrated = migrate_legacy_cache_to_registry(
         legacy,
         registry,
@@ -406,7 +413,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         source_path=legacy_path,
         overwrite=bool(args.overwrite),
         keep_logs=int(args.keep_logs),
+        reporter=reporter,
     )
+    done()
 
     if not args.no_scan:
         reporter, done = _make_progress(args)
