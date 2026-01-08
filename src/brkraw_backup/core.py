@@ -351,17 +351,23 @@ def mark_backup_result(
 
 
 def _status_cell(status: str) -> Mapping[str, Any]:
+    label_map = {
+        "MISSING": "NEED_BACKUP",
+    }
+    label = label_map.get(status, status)
     if status == "OK":
-        return {"value": status, "color": "green", "bold": True}
+        return {"value": label, "color": "green", "bold": True}
     if status == "ARCHIVED":
-        return {"value": status, "color": "green", "bold": True}
-    if status in {"MISSING", "CORRUPT", "INVALID"}:
-        return {"value": status, "color": "red", "bold": True}
+        return {"value": label, "color": "green", "bold": True}
+    if status == "MISSING":
+        return {"value": label, "color": "yellow", "bold": True}
+    if status in {"CORRUPT", "INVALID"}:
+        return {"value": label, "color": "red", "bold": True}
     if status == "MISMATCH":
-        return {"value": status, "color": "yellow", "bold": True}
+        return {"value": label, "color": "yellow", "bold": True}
     if status == "RAW_REMOVED":
-        return {"value": status, "color": "cyan"}
-    return {"value": status, "color": "gray"}
+        return {"value": label, "color": "cyan"}
+    return {"value": label, "color": "gray"}
 
 
 def _zip_root_prefix(zf: zipfile.ZipFile) -> str:
