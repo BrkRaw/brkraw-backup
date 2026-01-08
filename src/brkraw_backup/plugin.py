@@ -9,6 +9,7 @@ from typing import Optional
 
 from brkraw.core import config as config_core
 
+from . import __version__
 from .core import (
     DEFAULT_REGISTRY_NAME,
     archive_one,
@@ -26,6 +27,16 @@ from .core import (
 )
 
 logger = logging.getLogger("brkraw")
+
+_BANNER_PRINTED = False
+
+
+def _banner() -> None:
+    global _BANNER_PRINTED
+    if _BANNER_PRINTED:
+        return
+    _BANNER_PRINTED = True
+    logger.info("brkraw-backup v%s", __version__)
 
 
 def _make_progress(args: argparse.Namespace):
@@ -239,6 +250,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    _banner()
     raw_root = str(Path(args.raw_root).expanduser().resolve(strict=False))
     archive_root = str(Path(args.archive_root).expanduser().resolve(strict=False))
 
@@ -267,6 +279,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
+    _banner()
     try:
         raw_root, archive_root = _resolve_paths(args)
     except ValueError as exc:
@@ -289,6 +302,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
+    _banner()
     try:
         raw_root, archive_root = _resolve_paths(args)
     except ValueError as exc:
@@ -310,6 +324,7 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    _banner()
     try:
         raw_root, archive_root = _resolve_paths(args)
     except ValueError as exc:
@@ -390,6 +405,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
+    _banner()
     try:
         raw_root, archive_root = _resolve_paths(args, need_raw=not bool(args.no_scan), need_archive=True)
     except ValueError as exc:
@@ -460,6 +476,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
 
 def cmd_registry(args: argparse.Namespace) -> int:
+    _banner()
     try:
         _, archive_root = _resolve_paths(args, need_raw=False, need_archive=True)
     except ValueError as exc:
