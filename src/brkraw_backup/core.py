@@ -11,9 +11,8 @@ import shutil
 import zipfile
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 
-from brkraw.apps.loader.core import BrukerLoader
 from brkraw.core.formatter import format_data
-from brkraw.core.fs import DatasetFS
+from brkraw.dataclasses.study import Study
 
 logger = logging.getLogger("brkraw")
 
@@ -136,14 +135,16 @@ def _archive_key(zip_path: Path) -> str:
 
 def _load_loader(path: Path) -> Tuple[bool, Optional[int], Optional[str]]:
     try:
-        loader = BrukerLoader(path)
+        study = Study.from_path(path)
     except Exception:
         return False, None, None
     try:
-        scan_count = len(loader.avail)
+        scan_count = len(study.avail)
     except Exception:
         scan_count = None
-    return True, scan_count, loader.sw_version
+    # Avoid BrukerLoader sw_version parsing here to keep scans lightweight and
+    # prevent deep rule selection logs during simple status scans.
+    return True, scan_count, None
 
 
 def scan_datasets(
@@ -152,14 +153,10 @@ def scan_datasets(
     *,
     reporter: Optional[ProgressReporter] = None,
 ) -> List[DatasetSnapshot]:
-    logger.debug("Scanning datasets: raw_root=%s archive_root=%s", raw_root, archive_root)
+    logger.info("Scan start: raw_root=%s archive_root=%s", raw_root, archive_root)
     raw_datasets = _iter_raw_datasets(raw_root)
     archive_datasets = _iter_archive_files(archive_root)
-    logger.debug(
-        "Discovered candidates: raw=%d archive=%d",
-        len(raw_datasets),
-        len(archive_datasets),
-    )
+    logger.info("Discovered candidates: raw=%d archive=%d", len(raw_datasets), len(archive_datasets))
 
     keys = sorted(set(raw_datasets) | set(archive_datasets))
     snapshots: List[DatasetSnapshot] = []
@@ -222,7 +219,7 @@ def scan_datasets(
 
     if reporter:
         reporter(total, total, "scan:done")
-    logger.debug("Scan complete: datasets=%d", len(snapshots))
+    logger.info("Scan done: datasets=%d", len(snapshots))
     return snapshots
 
 

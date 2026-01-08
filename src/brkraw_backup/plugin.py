@@ -49,6 +49,7 @@ def _make_progress(args: argparse.Namespace):
     )
     last_emit = 0.0
     last_line_len = 0
+    start = time.time()
 
     def _label(step: str) -> str:
         if step.startswith("scan:"):
@@ -71,7 +72,12 @@ def _make_progress(args: argparse.Namespace):
         frac = min(1.0, max(0.0, current / total))
         filled = int(width * frac)
         bar = "#" * filled + "-" * (width - filled)
-        line = f"{label} [{bar}] {current}/{total}"
+        elapsed = max(0.001, time.time() - start)
+        rate = current / elapsed if current > 0 else 0.0
+        remaining = max(0, total - current)
+        eta = int(remaining / rate) if rate > 0 else -1
+        eta_txt = f"{eta}s" if eta >= 0 else "?"
+        line = f"{label} [{bar}] {current}/{total} ETA {eta_txt}"
         pad = " " * max(0, last_line_len - len(line))
         last_line_len = len(line)
         stream.write("\r" + line + pad)
@@ -410,6 +416,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         bool(args.overwrite),
         int(args.keep_logs),
     )
+    logger.info("Command: brkraw backup migrate")
     logger.info("Migrating legacy cache -> registry")
     logger.info("Legacy cache: %s", legacy_path)
     logger.info("Registry: %s", registry_path)
@@ -422,6 +429,12 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         return 2
 
     registry = load_registry(registry_path)
+    try:
+        datasets = registry.get("datasets", {})
+        existing = len(datasets) if isinstance(datasets, dict) else 0
+    except Exception:
+        existing = 0
+    logger.info("Registry loaded: datasets=%d", existing)
     reporter, done = _make_progress(args)
     registry, migrated = migrate_legacy_cache_to_registry(
         legacy,
