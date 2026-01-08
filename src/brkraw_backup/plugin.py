@@ -29,9 +29,22 @@ logger = logging.getLogger("brkraw")
 
 
 def _make_progress(args: argparse.Namespace):
+    def _pick_stream():
+        # brkraw's configure_logging() defaults to logging on stderr.
+        # Avoid mixing carriage-return progress output with log lines on the
+        # same stream by preferring stdout when root logging uses stderr.
+        root = logging.getLogger()
+        for handler in root.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                stream = getattr(handler, "stream", None)
+                if stream is sys.stderr:
+                    return sys.stdout
+        return sys.stderr
+
+    stream = _pick_stream()
     enabled = (
         not bool(getattr(args, "no_progress", False))
-        and sys.stderr.isatty()
+        and stream.isatty()
         and logger.isEnabledFor(logging.INFO)
     )
     last_emit = 0.0
@@ -61,14 +74,14 @@ def _make_progress(args: argparse.Namespace):
         line = f"{label} [{bar}] {current}/{total}"
         pad = " " * max(0, last_line_len - len(line))
         last_line_len = len(line)
-        sys.stderr.write("\r" + line + pad)
-        sys.stderr.flush()
+        stream.write("\r" + line + pad)
+        stream.flush()
 
     def done() -> None:
         if not enabled:
             return
-        sys.stderr.write("\n")
-        sys.stderr.flush()
+        stream.write("\n")
+        stream.flush()
 
     if not enabled:
         def reporter_noop(current: int, total: int, step: str) -> None:
@@ -384,6 +397,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     legacy_path = Path(args.old_cache).expanduser()
     if not legacy_path.is_absolute():
         legacy_path = archive_root / legacy_path
+
+    if args.old_cache == ".brk-backup_cache":
+        logger.info("Using default legacy cache path (relative to archive_root).")
 
     logger.debug(
         "backup migrate: legacy=%s registry=%s no_scan=%s overwrite=%s keep_logs=%s",
