@@ -677,9 +677,32 @@ def cmd_registry(args: argparse.Namespace) -> int:
     if not snapshots:
         logger.info("Registry is empty: %s", registry_path)
         return 0
+
+    def _integ_label(key: str) -> str:
+        datasets = registry.get("datasets", {})
+        if not isinstance(datasets, dict):
+            return "-"
+        entry = datasets.get(key)
+        if not isinstance(entry, dict):
+            return "-"
+        integ = entry.get("integrity")
+        if not isinstance(integ, dict):
+            return "-"
+        ok = integ.get("ok")
+        bytes_match = integ.get("bytes_match")
+        if ok is True:
+            return "WARN" if bytes_match is False else "OK"
+        if ok is False:
+            return "FAIL"
+        if ok is None:
+            return "SKIP"
+        return "?"
+
     include_status = getattr(args, "status", None)
     exclude_status = getattr(args, "exclude_status", None)
-    if include_status or exclude_status:
+    include_integ = getattr(args, "integ", None)
+    exclude_integ = getattr(args, "exclude_integ", None)
+    if include_status or exclude_status or include_integ or exclude_integ:
         def _expand(tokens: set[str]) -> set[str]:
             expanded: set[str] = set()
             for token in tokens:
@@ -700,12 +723,33 @@ def cmd_registry(args: argparse.Namespace) -> int:
         if exclude_status:
             exclude = _expand({s.strip().upper() for s in exclude_status.split(",") if s.strip()})
 
+        def _expand_integ(tokens: set[str]) -> set[str]:
+            expanded: set[str] = set()
+            for token in tokens:
+                if token in {"-", "NONE", "NOT_CHECKED", "UNCHECKED"}:
+                    expanded.add("-")
+                else:
+                    expanded.add(token)
+            return expanded
+
+        integ_include: Optional[set[str]] = None
+        integ_exclude: set[str] = set()
+        if include_integ:
+            integ_include = _expand_integ({s.strip().upper() for s in include_integ.split(",") if s.strip()})
+        if exclude_integ:
+            integ_exclude = _expand_integ({s.strip().upper() for s in exclude_integ.split(",") if s.strip()})
+
         filtered = []
         for snap in snapshots:
             status = str(getattr(snap, "status", "")).upper()
             if include is not None and status not in include:
                 continue
             if status in exclude:
+                continue
+            integ_label = _integ_label(str(getattr(snap, "key", "")))
+            if integ_include is not None and integ_label not in integ_include:
+                continue
+            if integ_label in integ_exclude:
                 continue
             filtered.append(snap)
         snapshots = filtered
@@ -761,6 +805,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[na
         "--exclude-status",
         dest="exclude_status",
         help="Exclude statuses (comma-separated).",
+    )
+    info_p.add_argument(
+        "--integ",
+        help="Filter by integrity state (comma-separated): -,OK,WARN,FAIL,SKIP.",
+    )
+    info_p.add_argument(
+        "--exclude-integ",
+        dest="exclude_integ",
+        help="Exclude integrity states (comma-separated).",
     )
     info_p.add_argument(
         "--root",

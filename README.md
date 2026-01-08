@@ -63,6 +63,7 @@ brkraw backup info
 brkraw backup info /archive
 brkraw backup info --status OK,ARCHIVED
 brkraw backup info --status TODO
+brkraw backup info --integ FAIL,WARN
 brkraw backup info --exclude-status UNKNOWN
 ```
 
