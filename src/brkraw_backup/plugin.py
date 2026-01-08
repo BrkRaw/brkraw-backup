@@ -336,15 +336,47 @@ def _maybe_run_integrity_checks(
         except Exception:
             return None
 
-    def _backup_dt(snap) -> object:
+    def _epoch_seconds(value: object) -> float:
+        dt = _parse_iso(value)
+        if dt is None:
+            return 0.0
+        if dt.tzinfo is None:
+            # Treat naive timestamps as UTC.
+            import datetime as _dt
+
+            dt = dt.replace(tzinfo=_dt.timezone.utc)
+        return dt.timestamp()
+
+    def _needs_check(entry: dict) -> bool:
+        last_backup_ts = _epoch_seconds(entry.get("last_backup"))
+        integ = entry.get("integrity")
+        last_check_ts = 0.0
+        if isinstance(integ, dict):
+            last_check_ts = _epoch_seconds(integ.get("checked_at"))
+        # If we don't know backup time, treat as needing check.
+        if last_backup_ts <= 0:
+            return True
+        # Run again only if backup is newer than the last check.
+        return last_check_ts < last_backup_ts
+
+    if mode == "new":
+        filtered = []
+        for snap in candidates:
+            entry = datasets.get(snap.key, {})
+            if not isinstance(entry, dict):
+                entry = {}
+            if _needs_check(entry):
+                filtered.append(snap)
+        candidates = filtered
+
+    def _last_backup_ts(snap) -> float:
         entry = datasets.get(snap.key, {})
         if isinstance(entry, dict):
-            dt = _parse_iso(entry.get("last_backup"))
-            if dt is not None:
-                return dt
-        return ""
+            return _epoch_seconds(entry.get("last_backup"))
+        return 0.0
 
-    candidates.sort(key=lambda s: (_backup_dt(s), s.key), reverse=True)
+    # Deterministic ordering: newest backups first, then key.
+    candidates.sort(key=lambda s: (_last_backup_ts(s), s.key), reverse=True)
 
     total = len(candidates)
     for idx, snap in enumerate(candidates, start=1):
@@ -354,15 +386,6 @@ def _maybe_run_integrity_checks(
         entry = datasets.get(snap.key, {})
         if not isinstance(entry, dict):
             entry = {}
-
-        if mode == "new":
-            last_backup = entry.get("last_backup")
-            last_check = entry.get("integrity", {}).get("checked_at") if isinstance(entry.get("integrity"), dict) else None
-            if isinstance(last_backup, str) and isinstance(last_check, str):
-                dt_backup = _parse_iso(last_backup)
-                dt_check = _parse_iso(last_check)
-                if dt_backup is not None and dt_check is not None and dt_check >= dt_backup:
-                    continue
 
         reporter(checked + 1, max(1, limit or total), "integrity:run")
         result = deep_integrity_check(Path(snap.raw_path), Path(snap.archive_path))
