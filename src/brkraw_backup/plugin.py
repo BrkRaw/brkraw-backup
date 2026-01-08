@@ -123,6 +123,20 @@ def _get_backup_paths_from_config(*, root: Optional[str]) -> tuple[Optional[str]
     return raw or None, arc or None
 
 
+def _configured_print_width(*, root: Optional[str]) -> Optional[int]:
+    cfg = config_core.load_config(root=root)
+    if not isinstance(cfg, dict):
+        return None
+    logging_cfg = cfg.get("logging", {})
+    if not isinstance(logging_cfg, dict):
+        return None
+    value = logging_cfg.get("print_width")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_archive: bool = True) -> tuple[Path, Path]:
     raw_cli = getattr(args, "raw_root", None) or getattr(args, "rawdata", None)
     arc_cli = getattr(args, "archive_root", None) or getattr(args, "archive", None)
@@ -285,7 +299,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
     _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
@@ -294,10 +307,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
     snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
     done()
     registry = load_registry(registry_path)
+    width = _configured_print_width(root=args.root)
+    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
-
-    logger.info("%s", render_scan_table(snapshots, width=width))
     return 0
 
 
@@ -308,7 +321,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = config_core.output_width(root=args.root)
+    width = _configured_print_width(root=args.root)
 
     _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
     logger.debug("backup review: raw_root=%s archive_root=%s", raw_root, archive_root)
@@ -319,7 +332,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     if not snapshots:
         logger.info("No issues found.")
         return 0
-    logger.info("%s", render_scan_table(snapshots, width=width))
+    registry = load_registry(archive_root / args.registry)
+    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
     return 0
 
 
@@ -330,7 +344,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = config_core.output_width(root=args.root)
+    width = _configured_print_width(root=args.root)
     registry_path = archive_root / args.registry
 
     _maybe_prompt_save_backup_paths(args, raw_root=raw_root, archive_root=archive_root)
@@ -400,7 +414,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     done()
     registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
     save_registry(registry_path, registry)
-    logger.info("%s", render_scan_table(snapshots, width=width))
+    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
     return 0
 
 
@@ -411,7 +425,6 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
     if not args.no_scan:
@@ -468,7 +481,8 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         snapshots = scan_datasets(raw_root, archive_root, reporter=reporter)
         done()
         registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
-        logger.info("%s", render_scan_table(snapshots, width=width))
+        width = _configured_print_width(root=args.root)
+        logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
 
     save_registry(registry_path, registry)
     logger.info("Migrated %d dataset entries from %s", migrated, legacy_path.name)
@@ -482,7 +496,6 @@ def cmd_registry(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
-    width = config_core.output_width(root=args.root)
     registry_path = archive_root / args.registry
 
     registry = load_registry(registry_path)
@@ -490,7 +503,8 @@ def cmd_registry(args: argparse.Namespace) -> int:
     if not snapshots:
         logger.info("Registry is empty: %s", registry_path)
         return 0
-    logger.info("%s", render_scan_table(snapshots, width=width))
+    width = _configured_print_width(root=args.root)
+    logger.info("%s", render_scan_table(snapshots, max_width=width, registry=registry))
     return 0
 
 

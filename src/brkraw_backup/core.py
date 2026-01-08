@@ -356,27 +356,153 @@ def _status_cell(status: str) -> Mapping[str, Any]:
     return {"value": status, "color": "gray"}
 
 
-def render_scan_table(snapshots: Sequence[DatasetSnapshot], *, width: Optional[int] = None) -> str:
+def _format_bytes(value: Optional[int]) -> str:
+    if value is None:
+        return "-"
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return "?"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024.0
+        idx += 1
+    if units[idx] in {"B", "KB"}:
+        return f"{int(size)}{units[idx]}"
+    return f"{size:.1f}{units[idx]}"
+
+
+def _format_backup_time(value: Optional[str]) -> str:
+    if not value:
+        return "-"
+    try:
+        dt = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return str(value)
+    # Render in local time for operator friendliness.
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _truncate(text: str, max_len: int) -> str:
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 1:
+        return text[:max_len]
+    return text[: max_len - 1] + "…"
+
+
+def render_scan_table(
+    snapshots: Sequence[DatasetSnapshot],
+    *,
+    max_width: Optional[int] = None,
+    registry: Optional[Mapping[str, Any]] = None,
+) -> str:
+    reg_datasets: Mapping[str, Any] = {}
+    if registry and isinstance(registry.get("datasets"), Mapping):
+        reg_datasets = registry.get("datasets", {})  # type: ignore[assignment]
+
     rows: List[Dict[str, Any]] = []
+    max_key_len = max((len(s.key) for s in snapshots), default=len("DATASET"))
+    key_w = max_key_len + 3
+
+    def _last_backup(key: str) -> str:
+        entry = reg_datasets.get(key)
+        if isinstance(entry, Mapping):
+            return _format_backup_time(entry.get("last_backup"))  # type: ignore[arg-type]
+        return "-"
+
     for snap in snapshots:
         raw_scans = "-" if not snap.raw_present else (snap.raw_scan_count if snap.raw_scan_count is not None else "?")
         arc_scans = "-" if not snap.archive_present else (
             snap.archive_scan_count if snap.archive_scan_count is not None else "?"
         )
         issues = ",".join(snap.issues) if snap.issues else ""
+        raw_sz = _format_bytes(snap.raw_bytes) if snap.raw_present else "-"
+        arc_sz = _format_bytes(snap.archive_bytes) if snap.archive_present else "-"
+        bkp_at = _last_backup(snap.key)
         rows.append(
             {
                 "key": {"value": snap.key, "bold": True},
-                "raw": raw_scans,
-                "arc": arc_scans,
+                "rawn": raw_scans,
+                "arcn": arc_scans,
+                "rawsz": raw_sz,
+                "arcsz": arc_sz,
+                "bkp": bkp_at,
                 "status": _status_cell(snap.status),
                 "issues": issues,
             }
         )
-    template = "{key: <28} {raw: >6} {arc: >6}  {status: <10} {issues}"
-    header = "DATASET                       RAW  ARC   STATUS      ISSUES"
+
+    # fixed-width columns (not including key/issues)
+    raw_w = max(3, len("RAW"))
+    arc_w = max(3, len("ARC"))
+    rawsz_w = max(6, len("RAW_SZ"))
+    arcz_w = max(6, len("ARC_SZ"))
+    bkp_w = len("BACKUP_AT")
+    status_w = max(10, len("STATUS"))
+    gap = "  "
+
+    fixed = (
+        raw_w
+        + len(gap)
+        + arc_w
+        + len(gap)
+        + rawsz_w
+        + len(gap)
+        + arcz_w
+        + len(gap)
+        + bkp_w
+        + len(gap)
+        + status_w
+        + len(gap)
+    )
+
+    issues_w: Optional[int] = None
+    if max_width is not None:
+        # Ensure at least some room for key.
+        min_key = 20
+        # Prefer user's "max+3" key width, but clamp to max_width.
+        max_key_allowed = max(min_key, max_width - fixed)
+        key_w = min(key_w, max_key_allowed)
+        remaining = max_width - fixed - key_w
+        issues_w = max(0, remaining)
+
+        # truncate content to fit without wrapping
+        for row in rows:
+            key_text = str(row.get("key", ""))
+            if isinstance(row.get("key"), Mapping):
+                key_text = str(row["key"].get("value", ""))  # type: ignore[assignment]
+                row["key"] = dict(row["key"])  # shallow copy
+                row["key"]["value"] = _truncate(key_text, key_w)  # type: ignore[index]
+            row["issues"] = _truncate(str(row.get("issues", "")), issues_w)
+
+    template = (
+        f"{{key: <{key_w}}}"
+        f"{{rawn: >{raw_w}}}{gap}"
+        f"{{arcn: >{arc_w}}}{gap}"
+        f"{{rawsz: >{rawsz_w}}}{gap}"
+        f"{{arcsz: >{arcz_w}}}{gap}"
+        f"{{bkp: <{bkp_w}}}{gap}"
+        f"{{status: <{status_w}}}{gap}"
+        f"{{issues}}"
+    )
+    header = (
+        f"{'DATASET': <{key_w}}"
+        f"{'RAW': >{raw_w}}{gap}"
+        f"{'ARC': >{arc_w}}{gap}"
+        f"{'RAW_SZ': >{rawsz_w}}{gap}"
+        f"{'ARC_SZ': >{arcz_w}}{gap}"
+        f"{'BACKUP_AT': <{bkp_w}}{gap}"
+        f"{'STATUS': <{status_w}}{gap}"
+        f"ISSUES"
+    )
     sep = "-" * len(header)
-    body = format_data(rows, template, width=width, on_missing="placeholder")
+    body = format_data(rows, template, width=None, on_missing="placeholder")
     return "\n".join([header, sep, body]) if body else "\n".join([header, sep])
 
 
