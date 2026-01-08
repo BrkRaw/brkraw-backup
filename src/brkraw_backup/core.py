@@ -354,7 +354,7 @@ def mark_backup_result(
 
 def _status_cell(status: str) -> Mapping[str, Any]:
     label_map = {
-        "MISSING": "NEED_BACKUP",
+        "MISSING": "TODO",
         # Raw missing but archive exists (validation may be unknown/failed).
         # Keep JSON status stable, but show friendlier label.
         "RAW_REMOVED": "ARCHIVED",
@@ -365,7 +365,7 @@ def _status_cell(status: str) -> Mapping[str, Any]:
     if status == "ARCHIVED":
         return {"value": label, "color": "green", "bold": True}
     if status == "MISSING":
-        return {"value": label, "color": "yellow", "bold": True}
+        return {"value": label, "color": "blue", "bold": True}
     if status in {"CORRUPT", "INVALID"}:
         return {"value": label, "color": "red", "bold": True}
     if status == "MISMATCH":
