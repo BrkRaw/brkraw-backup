@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+from typing import Optional
+
+from brkraw.core import config as config_core
+
+from .core import (
+    DEFAULT_REGISTRY_NAME,
+    archive_one,
+    load_registry,
+    load_legacy_cache,
+    mark_backup_result,
+    migrate_legacy_cache_to_registry,
+    maybe_delete_raw,
+    render_scan_table,
+    save_registry,
+    scan_datasets,
+    snapshots_from_registry,
+    update_registry,
+    verify_archive,
+)
+
+logger = logging.getLogger("brkraw")
+
+
+def _get_backup_paths_from_config(*, root: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    cfg = config_core.resolve_config(root=root)
+    backup_cfg = cfg.get("backup", {})
+    if not isinstance(backup_cfg, dict):
+        return None, None
+    raw = backup_cfg.get("rawdata")
+    arc = backup_cfg.get("archive")
+    raw = raw.strip() if isinstance(raw, str) else None
+    arc = arc.strip() if isinstance(arc, str) else None
+    return raw or None, arc or None
+
+
+def _resolve_paths(args: argparse.Namespace, *, need_raw: bool = True, need_archive: bool = True) -> tuple[Path, Path]:
+    raw_cli = getattr(args, "raw_root", None) or getattr(args, "rawdata", None)
+    arc_cli = getattr(args, "archive_root", None) or getattr(args, "archive", None)
+    raw_cfg, arc_cfg = _get_backup_paths_from_config(root=getattr(args, "root", None))
+
+    raw_value = raw_cli or raw_cfg
+    arc_value = arc_cli or arc_cfg
+
+    missing: list[str] = []
+    if need_raw and not raw_value:
+        missing.append("backup.rawdata (raw_root)")
+    if need_archive and not arc_value:
+        missing.append("backup.archive (archive_root)")
+    if missing:
+        hint = (
+            "Provide the missing path(s) as CLI args (or --rawdata/--archive), "
+            "or set them via: brkraw backup init <raw_root> <archive_root>."
+        )
+        raise ValueError(f"Missing required path(s): {', '.join(missing)}. {hint}")
+
+    raw_path = Path(raw_value).expanduser() if raw_value else Path()
+    arc_path = Path(arc_value).expanduser() if arc_value else Path()
+    return raw_path, arc_path
+
+
+def _add_init_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("raw_root", help="Directory containing raw datasets (subdirs).")
+    parser.add_argument("archive_root", help="Directory to store dataset zip archives.")
+    parser.add_argument(
+        "--root",
+        help="Override brkraw config root directory (default: BRKRAW_CONFIG_HOME or ~/.brkraw).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing config keys when present.",
+    )
+
+
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("raw_root", nargs="?", help="Directory containing raw datasets (subdirs).")
+    parser.add_argument("archive_root", nargs="?", help="Directory to store dataset zip archives.")
+    parser.add_argument("--rawdata", dest="rawdata", help="Override config backup.rawdata for this command.")
+    parser.add_argument("--archive", dest="archive", help="Override config backup.archive for this command.")
+    parser.add_argument(
+        "--registry",
+        default=DEFAULT_REGISTRY_NAME,
+        help=f"Registry filename stored under archive_root (default: {DEFAULT_REGISTRY_NAME}).",
+    )
+    parser.add_argument(
+        "--root",
+        help="Override brkraw config root directory (default: BRKRAW_CONFIG_HOME or ~/.brkraw).",
+    )
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    raw_root = str(Path(args.raw_root).expanduser())
+    archive_root = str(Path(args.archive_root).expanduser())
+
+    config_core.ensure_initialized(root=args.root, create_config=True, exist_ok=True)
+    config = config_core.load_config(root=args.root) or {}
+
+    backup_cfg = config.get("backup")
+    if not isinstance(backup_cfg, dict):
+        backup_cfg = {}
+
+    changed = False
+    for key, value in (("rawdata", raw_root), ("archive", archive_root)):
+        existing = backup_cfg.get(key)
+        if isinstance(existing, str) and existing.strip() and not args.force:
+            continue
+        backup_cfg[key] = value
+        changed = True
+
+    config["backup"] = backup_cfg
+    if changed:
+        config_core.write_config(config, root=args.root)
+        logger.info("Saved backup paths to config.yaml (section: backup).")
+    else:
+        logger.info("Config already has backup paths; skipped (use --force to overwrite).")
+    return 0
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    try:
+        raw_root, archive_root = _resolve_paths(args)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    width = config_core.output_width(root=args.root)
+    registry_path = archive_root / args.registry
+
+    snapshots = scan_datasets(raw_root, archive_root)
+    registry = load_registry(registry_path)
+    registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
+    save_registry(registry_path, registry)
+
+    logger.info("%s", render_scan_table(snapshots, width=width))
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    try:
+        raw_root, archive_root = _resolve_paths(args)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    width = config_core.output_width(root=args.root)
+
+    snapshots = [s for s in scan_datasets(raw_root, archive_root) if s.status != "OK"]
+    if not snapshots:
+        logger.info("No issues found.")
+        return 0
+    logger.info("%s", render_scan_table(snapshots, width=width))
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    try:
+        raw_root, archive_root = _resolve_paths(args)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    width = config_core.output_width(root=args.root)
+    registry_path = archive_root / args.registry
+
+    snapshots = scan_datasets(raw_root, archive_root)
+    registry = load_registry(registry_path)
+    registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
+
+    selected: Optional[set[str]] = None
+    if args.only:
+        selected = {name.strip() for name in args.only.split(",") if name.strip()}
+
+    todo = []
+    for snap in snapshots:
+        if selected is not None and snap.key not in selected:
+            continue
+        if snap.status in {"MISSING", "MISMATCH"}:
+            if not snap.raw_present or not snap.raw_path:
+                continue
+            todo.append(Path(snap.raw_path))
+
+    if not todo:
+        logger.info("Nothing to archive.")
+        save_registry(registry_path, registry)
+        return 0
+
+    for raw_path in todo:
+        dest, added, skipped = archive_one(raw_path, archive_root, rebuild=args.rebuild, dry_run=args.dry_run)
+        ok = True
+        if not args.dry_run:
+            ok = verify_archive(dest)
+        mark_backup_result(
+            registry,
+            key=raw_path.name,
+            archive_path=dest,
+            added=added,
+            skipped=skipped,
+            verified=ok,
+            dry_run=bool(args.dry_run),
+        )
+        if ok:
+            logger.info("Archived %s -> %s (added=%d skipped=%d)", raw_path.name, dest.name, added, skipped)
+            maybe_delete_raw(raw_path, allow=args.delete_raw, confirmed=args.yes, dry_run=args.dry_run)
+        else:
+            logger.error("Archive verification failed: %s", dest)
+
+    snapshots = scan_datasets(raw_root, archive_root)
+    registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
+    save_registry(registry_path, registry)
+    logger.info("%s", render_scan_table(snapshots, width=width))
+    return 0
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    try:
+        raw_root, archive_root = _resolve_paths(args, need_raw=not bool(args.no_scan), need_archive=True)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    width = config_core.output_width(root=args.root)
+    registry_path = archive_root / args.registry
+
+    legacy_path = Path(args.old_cache).expanduser()
+    if not legacy_path.is_absolute():
+        legacy_path = archive_root / legacy_path
+
+    legacy = load_legacy_cache(legacy_path)
+    if legacy is None:
+        logger.error("Legacy cache not found or unreadable: %s", legacy_path)
+        return 2
+
+    registry = load_registry(registry_path)
+    registry, migrated = migrate_legacy_cache_to_registry(
+        legacy,
+        registry,
+        archive_root=archive_root,
+        source_path=legacy_path,
+        overwrite=bool(args.overwrite),
+        keep_logs=int(args.keep_logs),
+    )
+
+    if not args.no_scan:
+        snapshots = scan_datasets(raw_root, archive_root)
+        registry = update_registry(registry, snapshots, raw_root=raw_root, archive_root=archive_root)
+        logger.info("%s", render_scan_table(snapshots, width=width))
+
+    save_registry(registry_path, registry)
+    logger.info("Migrated %d dataset entries from %s", migrated, legacy_path.name)
+    return 0
+
+
+def cmd_registry(args: argparse.Namespace) -> int:
+    try:
+        _, archive_root = _resolve_paths(args, need_raw=False, need_archive=True)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    width = config_core.output_width(root=args.root)
+    registry_path = archive_root / args.registry
+
+    registry = load_registry(registry_path)
+    snapshots = snapshots_from_registry(registry)
+    if not snapshots:
+        logger.info("Registry is empty: %s", registry_path)
+        return 0
+    logger.info("%s", render_scan_table(snapshots, width=width))
+    return 0
+
+
+def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[name-defined]
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Archive raw datasets into a zip-based backup registry.",
+    )
+    sub = backup_parser.add_subparsers(dest="backup_command", metavar="command")
+
+    init_p = sub.add_parser("init", help="Register raw/archive paths into brkraw config.yaml.")
+    _add_init_args(init_p)
+    init_p.set_defaults(func=cmd_init, parser=init_p)
+
+    info_p = sub.add_parser("info", help="Show last scanned status from the JSON registry.")
+    info_p.add_argument("archive_root", nargs="?", help="Directory that stores the JSON registry and archives.")
+    info_p.add_argument("--archive", dest="archive", help="Override config backup.archive for this command.")
+    info_p.add_argument(
+        "--registry",
+        default=DEFAULT_REGISTRY_NAME,
+        help=f"Registry filename stored under archive_root (default: {DEFAULT_REGISTRY_NAME}).",
+    )
+    info_p.add_argument(
+        "--root",
+        help="Override brkraw config root directory (default: BRKRAW_CONFIG_HOME or ~/.brkraw).",
+    )
+    info_p.set_defaults(func=cmd_registry, parser=info_p)
+
+    # Backwards-compatible alias.
+    reg_p = sub.add_parser("registry", help=argparse.SUPPRESS)
+    reg_p.add_argument("archive_root", nargs="?")
+    reg_p.add_argument("--archive", dest="archive")
+    reg_p.add_argument("--registry", default=DEFAULT_REGISTRY_NAME)
+    reg_p.add_argument("--root")
+    reg_p.set_defaults(func=cmd_registry, parser=reg_p)
+
+    scan_p = sub.add_parser("scan", help="Scan raw/archive dirs and update registry.")
+    _add_common_args(scan_p)
+    scan_p.set_defaults(func=cmd_scan, parser=scan_p)
+
+    review_p = sub.add_parser("review", help="Show only datasets with issues.")
+    _add_common_args(review_p)
+    review_p.set_defaults(func=cmd_review, parser=review_p)
+
+    run_p = sub.add_parser("run", help="Create/update archives for missing/mismatched datasets.")
+    _add_common_args(run_p)
+    run_p.add_argument("--only", help="Comma-separated dataset names to process.")
+    run_p.add_argument("--rebuild", action="store_true", help="Rebuild archives from scratch when present.")
+    run_p.add_argument("--dry-run", action="store_true", help="Plan actions without writing.")
+    run_p.add_argument("--delete-raw", action="store_true", help="Delete raw dataset after successful archive.")
+    run_p.add_argument("--yes", action="store_true", help="Confirm destructive operations (e.g., --delete-raw).")
+    run_p.set_defaults(func=cmd_run, parser=run_p)
+
+    mig_p = sub.add_parser("migrate", help="Migrate legacy (.brk-backup_cache) into JSON registry.")
+    _add_common_args(mig_p)
+    mig_p.add_argument(
+        "--old-cache",
+        default=".brk-backup_cache",
+        help="Legacy pickle cache filename or path (default: .brk-backup_cache under archive_root).",
+    )
+    mig_p.add_argument("--overwrite", action="store_true", help="Overwrite existing legacy_cache entries.")
+    mig_p.add_argument("--keep-logs", type=int, default=50, help="Keep last N legacy log records (default: 50).")
+    mig_p.add_argument("--no-scan", action="store_true", help="Skip a post-migration scan/update.")
+    mig_p.set_defaults(func=cmd_migrate, parser=mig_p)
+
+    backup_parser.set_defaults(
+        func=lambda args: (args.parser.print_help() or 2),  # type: ignore[attr-defined]
+        parser=backup_parser,
+    )

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brkraw-backup"
+version = "0.1.0"
+description = "Backup/archive CLI plugin for brkraw."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{name = "BrkRaw"}]
+dependencies = ["brkraw"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+
+[project.entry-points."brkraw.cli"]
+backup = "brkraw_backup.plugin:register"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
