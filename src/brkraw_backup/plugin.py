@@ -320,7 +320,7 @@ def _maybe_run_integrity_checks(
     for snap in snapshots:
         if not getattr(snap, "raw_present", False) or not getattr(snap, "archive_present", False):
             continue
-        if getattr(snap, "status", None) not in {"OK", "MISMATCH"}:
+        if getattr(snap, "status", None) not in {"MATCH", "MISMATCH"}:
             continue
         if not snap.raw_path or not snap.archive_path:
             continue
@@ -418,7 +418,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     reporter, done = _make_progress(args)
     snapshots_all = scan_datasets(raw_root, archive_root, reporter=reporter)
     done()
-    snapshots = [s for s in snapshots_all if s.status != "OK"]
+    snapshots = [s for s in snapshots_all if s.status != "MATCH"]
     if not snapshots:
         logger.info("No issues found.")
         return 0
