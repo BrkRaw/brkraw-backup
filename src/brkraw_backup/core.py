@@ -535,13 +535,13 @@ def render_scan_table(
         bkp_at = _last_backup(snap.key)
         rows.append(
             {
-                "key": {"value": snap.key, "bold": True},
+                "key": snap.key,
                 "rawn": raw_scans,
                 "arcn": arc_scans,
                 "rawsz": raw_sz,
                 "arcsz": arc_sz,
                 "bkp": bkp_at,
-                "status": _status_cell(snap.status),
+                "status": snap.status,
                 "issues": issues,
             }
         )
@@ -588,24 +588,31 @@ def render_scan_table(
 
         # issues truncation for width control happens below (common path)
 
-    # Always truncate keys to key_w (even when max_width is None),
-    # because alignment does not truncate overlong strings.
+    # Always truncate/pad keys and status using formatter-aware padding.
+    # (ANSI styling breaks Python's built-in width calculations.)
     for row in rows:
-        if isinstance(row.get("key"), Mapping):
-            key_text = str(row["key"].get("value", ""))  # type: ignore[index]
-            row["key"] = dict(row["key"])  # shallow copy
-            row["key"]["value"] = _truncate(key_text, key_w)  # type: ignore[index]
+        key_text = _truncate(str(row.get("key", "")), key_w)
+        row["key"] = {
+            "value": key_text,
+            "bold": True,
+            "size": key_w,
+            "align": "left",
+        }
+        status_cell = _status_cell(str(row.get("status", "UNKNOWN")))
+        status_cell = dict(status_cell)
+        status_cell.update({"size": status_w, "align": "left"})
+        row["status"] = status_cell
         if issues_w is not None:
             row["issues"] = _truncate(str(row.get("issues", "")), issues_w)
 
     template = (
-        f"{{key: <{key_w}}}{gap}"
+        f"{{key}}{gap}"
         f"{{rawn: >{raw_w}}}{gap}"
         f"{{arcn: >{arc_w}}}{gap}"
         f"{{rawsz: >{rawsz_w}}}{gap}"
         f"{{arcsz: >{arcz_w}}}{gap}"
         f"{{bkp: <{bkp_w}}}{gap}"
-        f"{{status: <{status_w}}}{gap}"
+        f"{{status}}{gap}"
         f"{{issues}}"
     )
     header = (
