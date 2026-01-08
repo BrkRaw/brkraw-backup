@@ -40,3 +40,9 @@ Options (available on `scan` and `run`):
 - `--integrity-limit N` (default: `0`)
   - `0`: no limit
   - `N`: check at most N datasets per command invocation
+
+The `info/scan/review/run` table includes an `INTEG` column:
+- `-`: not checked
+- `OK`: deep check passed
+- `FAIL`: deep check found missing files
+- `SKIP`: archive not a zip (cannot compare file lists)

@@ -524,6 +524,22 @@ def render_scan_table(
             return _format_backup_time(entry.get("last_backup"))  # type: ignore[arg-type]
         return "-"
 
+    def _integrity_status(key: str) -> str:
+        entry = reg_datasets.get(key)
+        if not isinstance(entry, Mapping):
+            return "-"
+        integ = entry.get("integrity")
+        if not isinstance(integ, Mapping):
+            return "-"
+        ok = integ.get("ok")
+        if ok is True:
+            return "OK"
+        if ok is False:
+            return "FAIL"
+        if ok is None:
+            return "SKIP"
+        return "?"
+
     for snap in snapshots:
         raw_scans = "-" if not snap.raw_present else (snap.raw_scan_count if snap.raw_scan_count is not None else "?")
         arc_scans = "-" if not snap.archive_present else (
@@ -533,6 +549,7 @@ def render_scan_table(
         raw_sz = _format_bytes(snap.raw_bytes) if snap.raw_present else "-"
         arc_sz = _format_bytes(snap.archive_bytes) if snap.archive_present else "-"
         bkp_at = _last_backup(snap.key)
+        integ = _integrity_status(snap.key)
         rows.append(
             {
                 "key": snap.key,
@@ -542,6 +559,7 @@ def render_scan_table(
                 "arcsz": arc_sz,
                 "bkp": bkp_at,
                 "status": snap.status,
+                "integ": integ,
                 "issues": issues,
             }
         )
@@ -559,6 +577,7 @@ def render_scan_table(
     arcz_w = max(len("ARC_SZ"), max((len(_cell_text(r["arcsz"])) for r in rows), default=1))
     bkp_w = max(len("BACKUP_AT"), max((len(_cell_text(r["bkp"])) for r in rows), default=1))
     status_w = max(len("STATUS"), max((len(_cell_text(r["status"])) for r in rows), default=1))
+    integ_w = max(len("INTEG"), max((len(_cell_text(r["integ"])) for r in rows), default=1))
 
     fixed = (
         len(gap)
@@ -573,6 +592,8 @@ def render_scan_table(
         + bkp_w
         + len(gap)
         + status_w
+        + len(gap)
+        + integ_w
         + len(gap)
     )
 
@@ -613,7 +634,7 @@ def render_scan_table(
         f"{{arcsz: >{arcz_w}}}{gap}"
         f"{{bkp: <{bkp_w}}}{gap}"
         f"{{status}}{gap}"
-        f"{{issues}}"
+        f"{{integ: <{integ_w}}}"
     )
     header = (
         f"{'DATASET': <{key_w}}{gap}"
@@ -623,10 +644,32 @@ def render_scan_table(
         f"{'ARC_SZ': >{arcz_w}}{gap}"
         f"{'BACKUP_AT': <{bkp_w}}{gap}"
         f"{'STATUS': <{status_w}}{gap}"
-        f"ISSUES"
+        f"{'INTEG': <{integ_w}}"
     )
     sep = "-" * len(header)
-    body = format_data(rows, template, width=None, on_missing="placeholder")
+    body_lines: List[str] = []
+    for row in rows:
+        rendered = format_data(row, template, width=None, on_missing="placeholder")
+        if rendered:
+            body_lines.append(rendered)
+        issues = str(row.get("issues") or "").strip()
+        if issues:
+            if max_width is not None:
+                issues = _truncate(issues, max(0, max_width - 4))
+            issues_line = format_data(
+                {
+                    "label": {"value": "ISSUES", "color": "red", "bold": True},
+                    "text": issues,
+                },
+                "{label}: {text}",
+                indent=2,
+                width=None,
+                on_missing="placeholder",
+            )
+            if issues_line:
+                body_lines.append(issues_line)
+
+    body = "\n".join(body_lines)
     return "\n".join([header, sep, body]) if body else "\n".join([header, sep])
 
 
